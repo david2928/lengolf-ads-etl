@@ -28,10 +28,6 @@ on:
         default: false
         type: boolean
 
-env:
-  ETL_SERVICE_URL: ${{ secrets.ETL_SERVICE_URL }}
-  ETL_API_KEY: ${{ secrets.ETL_API_KEY }}
-
 jobs:
   emergency-sync:
     name: Emergency ETL Sync
@@ -39,6 +35,61 @@ jobs:
     timeout-minutes: 45
     
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+
+      - name: Setup environment variables
+        run: |
+          echo "PORT=8080" >> $GITHUB_ENV
+          echo "NODE_ENV=production" >> $GITHUB_ENV
+          echo "LOG_LEVEL=info" >> $GITHUB_ENV
+          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_KEY=${{ secrets.SUPABASE_SERVICE_KEY }}" >> $GITHUB_ENV
+          echo "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}" >> $GITHUB_ENV
+          echo "GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" >> $GITHUB_ENV
+          echo "GOOGLE_CUSTOMER_ID=${{ secrets.GOOGLE_CUSTOMER_ID }}" >> $GITHUB_ENV
+          echo "GOOGLE_DEVELOPER_TOKEN=${{ secrets.GOOGLE_DEVELOPER_TOKEN }}" >> $GITHUB_ENV
+          echo "META_APP_ID=${{ secrets.META_APP_ID }}" >> $GITHUB_ENV
+          echo "META_APP_SECRET=${{ secrets.META_APP_SECRET }}" >> $GITHUB_ENV
+          echo "META_AD_ACCOUNT_ID=${{ secrets.META_AD_ACCOUNT_ID }}" >> $GITHUB_ENV
+          echo "ETL_API_KEY=${{ secrets.ETL_API_KEY }}" >> $GITHUB_ENV
+
+      - name: Start ETL service
+        run: |
+          echo "🚀 Starting ETL service in background..."
+          npm start &
+          ETL_PID=$!
+          echo "ETL_PID=$ETL_PID" >> $GITHUB_ENV
+          
+          # Wait for service to be ready
+          echo "⏳ Waiting for ETL service to start..."
+          for i in {1..30}; do
+            if curl -f http://localhost:8080/health >/dev/null 2>&1; then
+              echo "✅ ETL service is ready!"
+              break
+            fi
+            echo "Waiting... ($i/30)"
+            sleep 2
+          done
+          
+          # Verify service is running
+          if ! curl -f http://localhost:8080/health >/dev/null 2>&1; then
+            echo "❌ ETL service failed to start"
+            exit 1
+          fi
+
       - name: Validate Inputs
         run: |
           echo "🚨 Emergency ETL Sync Started"
@@ -65,7 +116,7 @@ jobs:
         run: |
           echo "🔍 Checking ETL service health..."
           
-          HEALTH_RESPONSE=$(curl -s -w "%{http_code}" "$ETL_SERVICE_URL/health")
+          HEALTH_RESPONSE=$(curl -s -w "%{http_code}" "http://localhost:8080/health")
           HTTP_CODE=${HEALTH_RESPONSE: -3}
           HEALTH_BODY=${HEALTH_RESPONSE%???}
           
@@ -87,7 +138,7 @@ jobs:
           GOOGLE_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
             -H "Content-Type: application/json" \
             -d '{"platform": "google", "mode": "incremental", "entities": ["campaigns"], "lookbackHours": 1}' \
-            "$ETL_SERVICE_URL/api/sync")
+            "http://localhost:8080/api/sync")
           
           GOOGLE_HTTP_CODE=${GOOGLE_RESPONSE: -3}
           
@@ -101,7 +152,7 @@ jobs:
           META_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
             -H "Content-Type: application/json" \
             -d '{"platform": "meta", "mode": "incremental", "entities": ["campaigns"], "lookbackHours": 1}' \
-            "$ETL_SERVICE_URL/api/sync")
+            "http://localhost:8080/api/sync")
           
           META_HTTP_CODE=${META_RESPONSE: -3}
           
@@ -122,7 +173,7 @@ jobs:
             RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
               -H "Content-Type: application/json" \
               -d "{\"platform\": \"$platform\", \"mode\": \"incremental\", \"entities\": [\"insights\", \"performance\"], \"lookbackHours\": 6}" \
-              "$ETL_SERVICE_URL/api/sync")
+              "http://localhost:8080/api/sync")
             
             HTTP_CODE=${RESPONSE: -3}
             BODY=${RESPONSE%???}
@@ -166,7 +217,7 @@ jobs:
             RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
               -H "Content-Type: application/json" \
               -d "{\"platform\": \"$platform\", \"mode\": \"full\", \"entities\": [\"$ENTITY\"], \"startDate\": \"$START_DATE\", \"endDate\": \"$END_DATE\"}" \
-              "$ETL_SERVICE_URL/api/sync")
+              "http://localhost:8080/api/sync")
             
             HTTP_CODE=${RESPONSE: -3}
             BODY=${RESPONSE%???}
@@ -195,7 +246,7 @@ jobs:
             RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
               -H "Content-Type: application/json" \
               -d "{\"platform\": \"meta\", \"mode\": \"full\", \"entities\": [\"$entity\"]}" \
-              "$ETL_SERVICE_URL/api/sync")
+              "http://localhost:8080/api/sync")
             
             HTTP_CODE=${RESPONSE: -3}
             BODY=${RESPONSE%???}
@@ -221,7 +272,7 @@ jobs:
             RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
               -H "Content-Type: application/json" \
               -d "{\"platform\": \"google\", \"mode\": \"full\", \"entities\": [\"$entity\"]}" \
-              "$ETL_SERVICE_URL/api/sync")
+              "http://localhost:8080/api/sync")
             
             HTTP_CODE=${RESPONSE: -3}
             BODY=${RESPONSE%???}
@@ -260,7 +311,7 @@ jobs:
           META_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
             -H "Content-Type: application/json" \
             -d "{\"platform\": \"meta\", \"mode\": \"full\", \"entities\": [\"insights\"], \"startDate\": \"$START_DATE\", \"endDate\": \"$END_DATE\"}" \
-            "$ETL_SERVICE_URL/api/sync")
+            "http://localhost:8080/api/sync")
           
           META_HTTP_CODE=${META_RESPONSE: -3}
           META_BODY=${META_RESPONSE%???}
@@ -278,7 +329,7 @@ jobs:
           GOOGLE_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
             -H "Content-Type: application/json" \
             -d "{\"platform\": \"google\", \"mode\": \"full\", \"entities\": [\"performance\"], \"startDate\": \"$START_DATE\", \"endDate\": \"$END_DATE\"}" \
-            "$ETL_SERVICE_URL/api/sync")
+            "http://localhost:8080/api/sync")
           
           GOOGLE_HTTP_CODE=${GOOGLE_RESPONSE: -3}
           GOOGLE_BODY=${GOOGLE_RESPONSE%???}
@@ -296,7 +347,7 @@ jobs:
           echo "🔍 Final status verification..."
           
           STATUS_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
-            "$ETL_SERVICE_URL/api/status")
+            "http://localhost:8080/api/status")
           
           STATUS_HTTP_CODE=${STATUS_RESPONSE: -3}
           STATUS_BODY=${STATUS_RESPONSE%???}
