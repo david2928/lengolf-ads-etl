@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "supabase": {
+      "command": "node",
+      "args": [
+        "node_modules/@supabase/mcp-server-supabase/dist/transports/stdio.js",
+        "--project-ref",
+        "bisimqmtxjsptehhqpeg"
+      ],
+      "env": {
+        "SUPABASE_ACCESS_TOKEN": "sbp_4a7b3363ee6de35786a1fff556286c59c47396e9"
+      }
+    },
+    "playwright": {
+      "command": "node",
+      "args": ["node_modules/@playwright/mcp/cli.js", "--headless"],
+      "env": {
+        "PLAYWRIGHT_BROWSERS_PATH": "0"
+      }
+    }
+  }
+}

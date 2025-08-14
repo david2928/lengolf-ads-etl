@@ -1,0 +1,315 @@
+name: ETL Emergency Sync & Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      recovery_type:
+        description: 'Type of recovery to perform'
+        required: true
+        type: choice
+        options:
+        - quick-sync
+        - full-historical
+        - meta-only
+        - google-only
+        - performance-only
+        - token-refresh
+      date_range_start:
+        description: 'Start date for historical sync (YYYY-MM-DD)'
+        required: false
+        type: string
+      date_range_end:
+        description: 'End date for historical sync (YYYY-MM-DD)'
+        required: false
+        type: string
+      force_token_refresh:
+        description: 'Force token refresh for both platforms'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  ETL_SERVICE_URL: ${{ secrets.ETL_SERVICE_URL }}
+  ETL_API_KEY: ${{ secrets.ETL_API_KEY }}
+
+jobs:
+  emergency-sync:
+    name: Emergency ETL Sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    steps:
+      - name: Validate Inputs
+        run: |
+          echo "🚨 Emergency ETL Sync Started"
+          echo "Recovery Type: ${{ github.event.inputs.recovery_type }}"
+          echo "Date Range: ${{ github.event.inputs.date_range_start }} to ${{ github.event.inputs.date_range_end }}"
+          echo "Force Token Refresh: ${{ github.event.inputs.force_token_refresh }}"
+          
+          # Validate date format if provided
+          if [ -n "${{ github.event.inputs.date_range_start }}" ]; then
+            if ! date -d "${{ github.event.inputs.date_range_start }}" >/dev/null 2>&1; then
+              echo "❌ Invalid start date format. Use YYYY-MM-DD"
+              exit 1
+            fi
+          fi
+          
+          if [ -n "${{ github.event.inputs.date_range_end }}" ]; then
+            if ! date -d "${{ github.event.inputs.date_range_end }}" >/dev/null 2>&1; then
+              echo "❌ Invalid end date format. Use YYYY-MM-DD"
+              exit 1
+            fi
+          fi
+
+      - name: Service Health Check
+        run: |
+          echo "🔍 Checking ETL service health..."
+          
+          HEALTH_RESPONSE=$(curl -s -w "%{http_code}" "$ETL_SERVICE_URL/health")
+          HTTP_CODE=${HEALTH_RESPONSE: -3}
+          HEALTH_BODY=${HEALTH_RESPONSE%???}
+          
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ ETL service is not responding (HTTP $HTTP_CODE)"
+            echo "$HEALTH_BODY"
+            exit 1
+          fi
+          
+          echo "✅ ETL service is healthy"
+
+      - name: Token Refresh (if requested)
+        if: ${{ github.event.inputs.force_token_refresh == 'true' || github.event.inputs.recovery_type == 'token-refresh' }}
+        run: |
+          echo "🔄 Forcing token refresh..."
+          
+          # Test both platforms to trigger token refresh
+          echo "Testing Google token..."
+          GOOGLE_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"platform": "google", "mode": "incremental", "entities": ["campaigns"], "lookbackHours": 1}' \
+            "$ETL_SERVICE_URL/api/sync")
+          
+          GOOGLE_HTTP_CODE=${GOOGLE_RESPONSE: -3}
+          
+          if [ "$GOOGLE_HTTP_CODE" = "200" ]; then
+            echo "✅ Google token refresh successful"
+          else
+            echo "⚠️ Google token refresh may have failed (HTTP $GOOGLE_HTTP_CODE)"
+          fi
+          
+          echo "Testing Meta token..."
+          META_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"platform": "meta", "mode": "incremental", "entities": ["campaigns"], "lookbackHours": 1}' \
+            "$ETL_SERVICE_URL/api/sync")
+          
+          META_HTTP_CODE=${META_RESPONSE: -3}
+          
+          if [ "$META_HTTP_CODE" = "200" ]; then
+            echo "✅ Meta token refresh successful"
+          else
+            echo "⚠️ Meta token refresh may have failed (HTTP $META_HTTP_CODE)"
+          fi
+
+      - name: Quick Sync
+        if: ${{ github.event.inputs.recovery_type == 'quick-sync' }}
+        run: |
+          echo "⚡ Performing quick sync (last 6 hours)..."
+          
+          for platform in meta google; do
+            echo "Syncing $platform performance data..."
+            
+            RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"platform\": \"$platform\", \"mode\": \"incremental\", \"entities\": [\"insights\", \"performance\"], \"lookbackHours\": 6}" \
+              "$ETL_SERVICE_URL/api/sync")
+            
+            HTTP_CODE=${RESPONSE: -3}
+            BODY=${RESPONSE%???}
+            
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "❌ $platform quick sync failed (HTTP $HTTP_CODE)"
+              echo "$BODY"
+              exit 1
+            fi
+            
+            echo "✅ $platform quick sync completed"
+          done
+
+      - name: Full Historical Sync
+        if: ${{ github.event.inputs.recovery_type == 'full-historical' }}
+        run: |
+          echo "📅 Performing full historical sync..."
+          
+          START_DATE="${{ github.event.inputs.date_range_start }}"
+          END_DATE="${{ github.event.inputs.date_range_end }}"
+          
+          # Default to last 30 days if no dates provided
+          if [ -z "$START_DATE" ]; then
+            START_DATE=$(date -d '30 days ago' '+%Y-%m-%d')
+          fi
+          
+          if [ -z "$END_DATE" ]; then
+            END_DATE=$(date '+%Y-%m-%d')
+          fi
+          
+          echo "Date range: $START_DATE to $END_DATE"
+          
+          for platform in meta google; do
+            echo "Historical sync for $platform..."
+            
+            ENTITY="insights"
+            if [ "$platform" = "google" ]; then
+              ENTITY="performance"
+            fi
+            
+            RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"platform\": \"$platform\", \"mode\": \"full\", \"entities\": [\"$ENTITY\"], \"startDate\": \"$START_DATE\", \"endDate\": \"$END_DATE\"}" \
+              "$ETL_SERVICE_URL/api/sync")
+            
+            HTTP_CODE=${RESPONSE: -3}
+            BODY=${RESPONSE%???}
+            
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "❌ $platform historical sync failed (HTTP $HTTP_CODE)"
+              echo "$BODY"
+              exit 1
+            fi
+            
+            echo "✅ $platform historical sync completed"
+            echo "$BODY" | jq '.summary'
+            
+            # Add delay between platforms to avoid rate limiting
+            sleep 30
+          done
+
+      - name: Meta Only Sync
+        if: ${{ github.event.inputs.recovery_type == 'meta-only' }}
+        run: |
+          echo "📱 Performing Meta-only full sync..."
+          
+          for entity in campaigns adsets ads insights; do
+            echo "Syncing Meta $entity..."
+            
+            RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"platform\": \"meta\", \"mode\": \"full\", \"entities\": [\"$entity\"]}" \
+              "$ETL_SERVICE_URL/api/sync")
+            
+            HTTP_CODE=${RESPONSE: -3}
+            BODY=${RESPONSE%???}
+            
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "❌ Meta $entity sync failed (HTTP $HTTP_CODE)"
+              echo "$BODY"
+              exit 1
+            fi
+            
+            echo "✅ Meta $entity sync completed"
+            sleep 15
+          done
+
+      - name: Google Only Sync
+        if: ${{ github.event.inputs.recovery_type == 'google-only' }}
+        run: |
+          echo "🔍 Performing Google-only full sync..."
+          
+          for entity in campaigns ad_groups ads keywords performance; do
+            echo "Syncing Google $entity..."
+            
+            RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"platform\": \"google\", \"mode\": \"full\", \"entities\": [\"$entity\"]}" \
+              "$ETL_SERVICE_URL/api/sync")
+            
+            HTTP_CODE=${RESPONSE: -3}
+            BODY=${RESPONSE%???}
+            
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "❌ Google $entity sync failed (HTTP $HTTP_CODE)"
+              echo "$BODY"
+              exit 1
+            fi
+            
+            echo "✅ Google $entity sync completed"
+            sleep 15
+          done
+
+      - name: Performance Only Sync
+        if: ${{ github.event.inputs.recovery_type == 'performance-only' }}
+        run: |
+          echo "📊 Performing performance-only sync..."
+          
+          START_DATE="${{ github.event.inputs.date_range_start }}"
+          END_DATE="${{ github.event.inputs.date_range_end }}"
+          
+          # Default to last 7 days if no dates provided
+          if [ -z "$START_DATE" ]; then
+            START_DATE=$(date -d '7 days ago' '+%Y-%m-%d')
+          fi
+          
+          if [ -z "$END_DATE" ]; then
+            END_DATE=$(date '+%Y-%m-%d')
+          fi
+          
+          echo "Performance sync date range: $START_DATE to $END_DATE"
+          
+          # Meta insights
+          echo "Syncing Meta insights..."
+          META_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"platform\": \"meta\", \"mode\": \"full\", \"entities\": [\"insights\"], \"startDate\": \"$START_DATE\", \"endDate\": \"$END_DATE\"}" \
+            "$ETL_SERVICE_URL/api/sync")
+          
+          META_HTTP_CODE=${META_RESPONSE: -3}
+          META_BODY=${META_RESPONSE%???}
+          
+          if [ "$META_HTTP_CODE" != "200" ]; then
+            echo "❌ Meta insights sync failed (HTTP $META_HTTP_CODE)"
+            echo "$META_BODY"
+            exit 1
+          fi
+          
+          echo "✅ Meta insights sync completed"
+          
+          # Google performance
+          echo "Syncing Google performance..."
+          GOOGLE_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"platform\": \"google\", \"mode\": \"full\", \"entities\": [\"performance\"], \"startDate\": \"$START_DATE\", \"endDate\": \"$END_DATE\"}" \
+            "$ETL_SERVICE_URL/api/sync")
+          
+          GOOGLE_HTTP_CODE=${GOOGLE_RESPONSE: -3}
+          GOOGLE_BODY=${GOOGLE_RESPONSE%???}
+          
+          if [ "$GOOGLE_HTTP_CODE" != "200" ]; then
+            echo "❌ Google performance sync failed (HTTP $GOOGLE_HTTP_CODE)"
+            echo "$GOOGLE_BODY"
+            exit 1
+          fi
+          
+          echo "✅ Google performance sync completed"
+
+      - name: Final Status Check
+        run: |
+          echo "🔍 Final status verification..."
+          
+          STATUS_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
+            "$ETL_SERVICE_URL/api/status")
+          
+          STATUS_HTTP_CODE=${STATUS_RESPONSE: -3}
+          STATUS_BODY=${STATUS_RESPONSE%???}
+          
+          if [ "$STATUS_HTTP_CODE" != "200" ]; then
+            echo "⚠️ Status check failed (HTTP $STATUS_HTTP_CODE)"
+            echo "$STATUS_BODY"
+          else
+            echo "✅ Final status check passed"
+            echo "$STATUS_BODY" | jq '.'
+          fi
+          
+          echo ""
+          echo "🚨 Emergency sync completed successfully!"
+          echo "Recovery type: ${{ github.event.inputs.recovery_type }}"
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S UTC')"

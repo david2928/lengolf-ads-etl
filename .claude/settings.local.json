@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install)",
+      "WebFetch(domain:docs.anthropic.com)",
+      "WebSearch",
+      "Bash(npm install:*)",
+      "Bash(npm run build:*)",
+      "mcp__supabase__get_project_url",
+      "mcp__supabase__list_tables",
+      "mcp__supabase__execute_sql",
+      "Bash(npm run dev:*)",
+      "mcp__supabase__apply_migration",
+      "Bash(taskkill:*)",
+      "Bash(node:*)",
+      "Bash(\"taskkill\" \"/F\" \"/PID\" \"7852\")",
+      "Bash(powershell:*)",
+      "Bash(npm info:*)",
+      "WebFetch(domain:developers.google.com)",
+      "Bash(rm:*)",
+      "Bash(npx tsc:*)",
+      "Bash(curl:*)",
+      "Bash(pkill:*)",
+      "Bash(npm run lint)",
+      "WebFetch(domain:developers.facebook.com)",
+      "Bash(git init:*)",
+      "Bash(git remote add:*)",
+      "Bash(git add:*)",
+      "Bash(git remote set-url:*)"
+    ],
+    "deny": [],
+    "ask": []
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "supabase",
+    "playwright"
+  ]
+}

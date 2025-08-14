@@ -1,0 +1,610 @@
+import SupabaseLoader from './supabase-client';
+import BatchProcessor from './batch-processor';
+import GoogleAdsExtractor from '@/extractors/google/ads';
+import GoogleAdsPerformanceExtractor from '@/extractors/google/performance';
+import MetaCampaignsExtractor from '@/extractors/meta/campaigns';
+import MetaAdSetsExtractor from '@/extractors/meta/ad-sets';
+import MetaAdsExtractor from '@/extractors/meta/ads';
+import MetaAdsInsightsExtractor from '@/extractors/meta/insights';
+import logger from '@/utils/logger';
+import { SyncResult, SyncState, SyncParams } from '@/utils/types';
+
+export class IncrementalSyncManager {
+  private supabase: SupabaseLoader;
+  private batchProcessor: BatchProcessor;
+  private googleExtractor: GoogleAdsExtractor;
+  private googlePerformanceExtractor: GoogleAdsPerformanceExtractor;
+  private metaCampaignsExtractor: MetaCampaignsExtractor;
+  private metaAdSetsExtractor: MetaAdSetsExtractor;
+  private metaAdsExtractor: MetaAdsExtractor;
+  private metaInsightsExtractor: MetaAdsInsightsExtractor;
+
+  constructor() {
+    this.supabase = new SupabaseLoader();
+    this.batchProcessor = new BatchProcessor();
+    this.googleExtractor = new GoogleAdsExtractor();
+    this.googlePerformanceExtractor = new GoogleAdsPerformanceExtractor();
+    this.metaCampaignsExtractor = new MetaCampaignsExtractor();
+    this.metaAdSetsExtractor = new MetaAdSetsExtractor();
+    this.metaAdsExtractor = new MetaAdsExtractor();
+    this.metaInsightsExtractor = new MetaAdsInsightsExtractor();
+  }
+
+  async performIncrementalSync(
+    platform: 'google' | 'meta',
+    entityType: string,
+    options: {
+      lookbackHours?: number;
+      lookbackDays?: number;
+      forceFullSync?: boolean;
+      startDate?: string;
+      endDate?: string;
+    } = {}
+  ): Promise<SyncResult> {
+    const startTime = Date.now();
+    
+    try {
+      logger.info('Starting incremental sync', {
+        platform,
+        entityType,
+        options
+      });
+
+      // Create sync batch record
+      const batchId = await this.supabase.createSyncBatch(
+        platform,
+        options.forceFullSync ? 'full' : 'incremental',
+        [entityType]
+      );
+
+      // Get last sync state
+      const lastSync = await this.getLastSyncState(platform, entityType);
+      
+      // Calculate sync parameters
+      const syncParams = this.calculateSyncParams(lastSync, options);
+      
+      // Extract data based on platform and entity type
+      let extractedData;
+      let result: any;
+
+      if (platform === 'google') {
+        result = await this.syncGoogleEntity(entityType, syncParams, batchId, options);
+      } else {
+        result = await this.syncMetaEntity(entityType, syncParams, batchId, options);
+      }
+
+      // Update sync state
+      await this.updateSyncState(platform, entityType, {
+        last_sync_time: new Date(),
+        records_processed: result.inserted + result.updated,
+        status: 'completed'
+      });
+
+      const duration = Date.now() - startTime;
+      
+      const syncResult: SyncResult = {
+        batchId,
+        platform,
+        entityType,
+        recordsProcessed: result.inserted + result.updated + result.failed,
+        recordsInserted: result.inserted,
+        recordsUpdated: result.updated,
+        recordsFailed: result.failed,
+        duration,
+        status: result.failed === 0 ? 'completed' : 'partial'
+      };
+
+      logger.info('Incremental sync completed', syncResult);
+      return syncResult;
+
+    } catch (error) {
+      logger.error('Incremental sync failed', {
+        platform,
+        entityType,
+        error: error.message
+      });
+
+      return {
+        batchId: '',
+        platform,
+        entityType,
+        recordsProcessed: 0,
+        recordsInserted: 0,
+        recordsUpdated: 0,
+        recordsFailed: 0,
+        duration: Date.now() - startTime,
+        status: 'failed',
+        errorMessage: error.message
+      };
+    }
+  }
+
+  private async getLastSyncState(platform: string, entityType: string): Promise<SyncState> {
+    const lastSync = await this.supabase.getLastSyncState(platform, entityType);
+    
+    return {
+      platform,
+      entity_type: entityType,
+      last_sync_time: new Date(lastSync.last_sync_time || Date.now() - 7 * 24 * 60 * 60 * 1000),
+      last_modified_time: lastSync.last_modified_time ? new Date(lastSync.last_modified_time) : undefined,
+      next_page_token: lastSync.next_page_token,
+      sync_status: lastSync.sync_status || 'completed',
+      error_message: lastSync.error_message
+    };
+  }
+
+  private calculateSyncParams(
+    lastSync: SyncState,
+    options: {
+      lookbackHours?: number;
+      lookbackDays?: number;
+      forceFullSync?: boolean;
+    }
+  ): SyncParams {
+    if (options.forceFullSync) {
+      return {
+        modifiedSince: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) // 30 days ago
+      };
+    }
+
+    const lookbackHours = options.lookbackHours || 2;
+    const lookbackDays = options.lookbackDays || 0;
+    
+    let modifiedSince = lastSync.last_modified_time || lastSync.last_sync_time;
+    
+    // Apply lookback buffer to catch late-arriving data
+    if (lookbackHours > 0) {
+      modifiedSince = new Date(modifiedSince.getTime() - (lookbackHours * 60 * 60 * 1000));
+    }
+    
+    if (lookbackDays > 0) {
+      modifiedSince = new Date(modifiedSince.getTime() - (lookbackDays * 24 * 60 * 60 * 1000));
+    }
+
+    return {
+      modifiedSince,
+      pageToken: lastSync.next_page_token
+    };
+  }
+
+  private async syncGoogleEntity(
+    entityType: string,
+    syncParams: SyncParams,
+    batchId: string,
+    options: any = {}
+  ): Promise<any> {
+    switch (entityType) {
+      case 'campaigns':
+        return this.syncGoogleCampaigns(syncParams, batchId);
+      
+      case 'ad_groups':
+        return this.syncGoogleAdGroups(syncParams, batchId);
+      
+      case 'ads':
+        return this.syncGoogleAds(syncParams, batchId);
+      
+      case 'keywords':
+        return this.syncGoogleKeywords(syncParams, batchId);
+      
+      case 'performance':
+        return this.syncGooglePerformance(syncParams, batchId);
+      
+      default:
+        throw new Error(`Unknown Google entity type: ${entityType}`);
+    }
+  }
+
+  private async syncMetaEntity(
+    entityType: string,
+    syncParams: SyncParams,
+    batchId: string,
+    options: any = {}
+  ): Promise<any> {
+    switch (entityType) {
+      case 'campaigns':
+        return this.syncMetaCampaigns(syncParams, batchId);
+      
+      case 'adsets':
+        return this.syncMetaAdSets(syncParams, batchId);
+      
+      case 'ads':
+        return this.syncMetaAds(syncParams, batchId);
+      
+      case 'creatives':
+        return this.syncMetaCreatives(syncParams, batchId);
+      
+      case 'insights':
+        return this.syncMetaInsights(syncParams, batchId, options);
+      
+      default:
+        throw new Error(`Unknown Meta entity type: ${entityType}`);
+    }
+  }
+
+  private async syncGoogleCampaigns(syncParams: SyncParams, batchId: string): Promise<any> {
+    try {
+      logger.info('Syncing Google Ads campaigns', { 
+        modifiedSince: syncParams.modifiedSince.toISOString(),
+        batchId 
+      });
+
+      const campaigns = await this.googleExtractor.extractCampaigns(syncParams.modifiedSince);
+      const result = await this.batchProcessor.processGoogleCampaigns(campaigns, batchId);
+
+      logger.info('Google campaigns sync completed', {
+        campaignCount: campaigns.length,
+        result
+      });
+
+      return result;
+
+    } catch (error) {
+      logger.error('Google campaigns sync failed', { error: error.message });
+      throw error;
+    }
+  }
+
+  private async syncGoogleAdGroups(syncParams: SyncParams, batchId: string): Promise<any> {
+    try {
+      logger.info('Syncing Google Ads ad groups', { 
+        modifiedSince: syncParams.modifiedSince.toISOString(),
+        batchId 
+      });
+
+      const adGroups = await this.googleExtractor.extractAdGroups(undefined, syncParams.modifiedSince);
+      const result = await this.batchProcessor.processGoogleAdGroups(adGroups, batchId);
+
+      logger.info('Google ad groups sync completed', {
+        adGroupCount: adGroups.length,
+        result
+      });
+
+      return result;
+
+    } catch (error) {
+      logger.error('Google ad groups sync failed', { error: error.message });
+      throw error;
+    }
+  }
+
+  private async syncGoogleAds(syncParams: SyncParams, batchId: string): Promise<any> {
+    try {
+      logger.info('Syncing Google Ads with creatives', { 
+        modifiedSince: syncParams.modifiedSince.toISOString(),
+        batchId 
+      });
+
+      const adsWithCreatives = await this.googleExtractor.extractAdsWithCreatives(
+        syncParams.modifiedSince
+      );
+      
+      const result = await this.batchProcessor.processGoogleAdsWithCreatives(
+        adsWithCreatives,
+        batchId
+      );
+
+      logger.info('Google ads sync completed', {
+        adCount: adsWithCreatives.length,
+        result
+      });
+
+      return result;
+
+    } catch (error) {
+      logger.error('Google ads sync failed', { error: error.message });
+      throw error;
+    }
+  }
+
+  private async syncGoogleKeywords(syncParams: SyncParams, batchId: string): Promise<any> {
+    try {
+      logger.info('Syncing Google Ads keywords', { 
+        modifiedSince: syncParams.modifiedSince.toISOString(),
+        batchId 
+      });
+
+      // TODO: Implement keyword extraction in GoogleAdsExtractor
+      // For now, return empty result
+      return { inserted: 0, updated: 0, failed: 0 };
+
+    } catch (error) {
+      logger.error('Google keywords sync failed', { error: error.message });
+      throw error;
+    }
+  }
+
+  private async syncGooglePerformance(syncParams: SyncParams, batchId: string): Promise<any> {
+    try {
+      logger.info('Syncing Google Ads performance data', { 
+        modifiedSince: syncParams.modifiedSince.toISOString(),
+        batchId 
+      });
+
+      // Extract all performance data types in parallel
+      const [keywordPerformance, campaignPerformance, pmaxPerformance] = await Promise.all([
+        this.googlePerformanceExtractor.extractKeywordPerformance(
+          undefined, // startDate
+          undefined, // endDate  
+          syncParams.modifiedSince
+        ),
+        this.googlePerformanceExtractor.extractCampaignPerformance(
+          undefined,
+          undefined,
+          syncParams.modifiedSince
+        ),
+        this.googlePerformanceExtractor.extractPMaxPerformance(
+          undefined,
+          undefined,
+          syncParams.modifiedSince
+        )
+      ]);
+
+      // Process all performance data in parallel
+      const [keywordResult, campaignResult, pmaxResult] = await Promise.all([
+        this.batchProcessor.processGoogleKeywordPerformance(keywordPerformance, batchId),
+        this.batchProcessor.processGoogleCampaignPerformance(campaignPerformance, batchId),
+        this.batchProcessor.processGooglePMaxPerformance(pmaxPerformance, batchId)
+      ]);
+
+      const totalResult = {
+        inserted: keywordResult.inserted + campaignResult.inserted + pmaxResult.inserted,
+        updated: keywordResult.updated + campaignResult.updated + pmaxResult.updated,
+        failed: keywordResult.failed + campaignResult.failed + pmaxResult.failed
+      };
+
+      logger.info('Google performance sync completed', {
+        keywordRecords: keywordPerformance.length,
+        campaignRecords: campaignPerformance.length,
+        pmaxRecords: pmaxPerformance.length,
+        result: totalResult
+      });
+
+      return totalResult;
+
+    } catch (error) {
+      logger.error('Google performance sync failed', { error: error.message });
+      throw error;
+    }
+  }
+
+  private async syncMetaCampaigns(syncParams: SyncParams, batchId: string): Promise<any> {
+    try {
+      logger.info('Syncing Meta campaigns', { 
+        modifiedSince: syncParams.modifiedSince.toISOString(),
+        batchId 
+      });
+
+      const campaigns = await this.metaCampaignsExtractor.extractCampaigns(syncParams.modifiedSince);
+      const result = await this.batchProcessor.processMetaCampaigns(campaigns, batchId);
+
+      logger.info('Meta campaigns sync completed', {
+        campaignCount: campaigns.length,
+        result
+      });
+
+      return result;
+
+    } catch (error) {
+      logger.error('Meta campaigns sync failed', { error: error.message });
+      throw error;
+    }
+  }
+
+  private async syncMetaAdSets(syncParams: SyncParams, batchId: string): Promise<any> {
+    try {
+      logger.info('Syncing Meta ad sets', { 
+        modifiedSince: syncParams.modifiedSince.toISOString(),
+        batchId 
+      });
+
+      const adSets = await this.metaAdSetsExtractor.extractAdSets(undefined, syncParams.modifiedSince);
+      const result = await this.batchProcessor.processMetaAdSets(adSets, batchId);
+
+      logger.info('Meta ad sets sync completed', {
+        adSetCount: adSets.length,
+        result
+      });
+
+      return result;
+
+    } catch (error) {
+      logger.error('Meta ad sets sync failed', { error: error.message });
+      throw error;
+    }
+  }
+
+  private async syncMetaAds(syncParams: SyncParams, batchId: string): Promise<any> {
+    try {
+      logger.info('Syncing Meta ads with creatives', { 
+        modifiedSince: syncParams.modifiedSince.toISOString(),
+        batchId 
+      });
+
+      const adsWithCreatives = await this.metaAdsExtractor.extractAdsWithCreatives(
+        undefined,
+        syncParams.modifiedSince
+      );
+      
+      const result = await this.batchProcessor.processMetaAdsWithCreatives(
+        adsWithCreatives,
+        batchId
+      );
+
+      logger.info('Meta ads sync completed', {
+        adCount: adsWithCreatives.length,
+        result
+      });
+
+      return result;
+
+    } catch (error) {
+      logger.error('Meta ads sync failed', { error: error.message });
+      throw error;
+    }
+  }
+
+  private async syncMetaCreatives(syncParams: SyncParams, batchId: string): Promise<any> {
+    try {
+      logger.info('Syncing Meta creatives', { 
+        modifiedSince: syncParams.modifiedSince.toISOString(),
+        batchId 
+      });
+
+      // Meta creatives are extracted as part of ads extraction
+      // This method is kept for consistency but delegates to ads sync
+      return this.syncMetaAds(syncParams, batchId);
+
+    } catch (error) {
+      logger.error('Meta creatives sync failed', { error: error.message });
+      throw error;
+    }
+  }
+
+  private async syncMetaInsights(syncParams: SyncParams, batchId: string, options: any = {}): Promise<any> {
+    try {
+      logger.info('Syncing Meta insights data', { 
+        modifiedSince: syncParams.modifiedSince.toISOString(),
+        batchId 
+      });
+
+      // Extract all performance data types in parallel
+      // Use explicit date range from options if provided, otherwise use modifiedSince for incremental
+      const startDate = options.startDate ? new Date(options.startDate) : undefined;
+      const endDate = options.endDate ? new Date(options.endDate) : undefined;
+      
+      const performanceData = await this.metaInsightsExtractor.extractAllPerformanceData(
+        startDate,
+        endDate, 
+        startDate ? undefined : syncParams.modifiedSince  // Only use modifiedSince if no explicit startDate
+      );
+
+      // Process both campaign and adset performance data in parallel
+      const [campaignResult, adsetResult] = await Promise.all([
+        this.batchProcessor.processMetaCampaignPerformance(performanceData.campaigns, batchId),
+        this.batchProcessor.processMetaAdsetPerformance(performanceData.adsets, batchId)
+      ]);
+
+      const totalResult = {
+        inserted: campaignResult.inserted + adsetResult.inserted,
+        updated: campaignResult.updated + adsetResult.updated,
+        failed: campaignResult.failed + adsetResult.failed
+      };
+
+      logger.info('Meta insights sync completed', {
+        campaignRecords: performanceData.campaigns.length,
+        adsetRecords: performanceData.adsets.length,
+        result: totalResult
+      });
+
+      return totalResult;
+
+    } catch (error) {
+      logger.error('Meta insights sync failed', { error: error.message });
+      throw error;
+    }
+  }
+
+  private async updateSyncState(
+    platform: string,
+    entityType: string,
+    updates: {
+      last_sync_time: Date;
+      records_processed: number;
+      status: string;
+      error_message?: string;
+    }
+  ): Promise<void> {
+    try {
+      // This would typically update a sync state table
+      // For now, we'll log the state update
+      logger.info('Sync state updated', {
+        platform,
+        entityType,
+        lastSyncTime: updates.last_sync_time.toISOString(),
+        recordsProcessed: updates.records_processed,
+        status: updates.status
+      });
+
+    } catch (error) {
+      logger.error('Failed to update sync state', {
+        platform,
+        entityType,
+        error: error.message
+      });
+    }
+  }
+
+  async syncCampaigns(
+    platform: 'google' | 'meta',
+    mode: 'incremental' | 'full',
+    options: any
+  ): Promise<SyncResult> {
+    return this.performIncrementalSync(platform, 'campaigns', {
+      ...options,
+      forceFullSync: mode === 'full'
+    });
+  }
+
+  async syncAdGroups(
+    platform: 'google' | 'meta',
+    mode: 'incremental' | 'full',
+    options: any
+  ): Promise<SyncResult> {
+    const entityType = platform === 'google' ? 'ad_groups' : 'adsets';
+    return this.performIncrementalSync(platform, entityType, {
+      ...options,
+      forceFullSync: mode === 'full'
+    });
+  }
+
+  async syncAds(
+    platform: 'google' | 'meta',
+    mode: 'incremental' | 'full',
+    options: any
+  ): Promise<SyncResult> {
+    return this.performIncrementalSync(platform, 'ads', {
+      ...options,
+      forceFullSync: mode === 'full'
+    });
+  }
+
+  async syncCreatives(
+    platform: 'google' | 'meta',
+    mode: 'incremental' | 'full',
+    options: any
+  ): Promise<SyncResult> {
+    return this.performIncrementalSync(platform, 'creatives', {
+      ...options,
+      forceFullSync: mode === 'full'
+    });
+  }
+
+  async syncKeywords(
+    platform: 'google' | 'meta',
+    mode: 'incremental' | 'full',
+    options: any
+  ): Promise<SyncResult> {
+    if (platform !== 'google') {
+      throw new Error('Keywords are only available for Google Ads');
+    }
+    
+    return this.performIncrementalSync(platform, 'keywords', {
+      ...options,
+      forceFullSync: mode === 'full'
+    });
+  }
+
+  async syncPerformance(
+    platform: 'google' | 'meta',
+    mode: 'incremental' | 'full',
+    options: any
+  ): Promise<SyncResult> {
+    const entityType = platform === 'google' ? 'performance' : 'insights';
+    return this.performIncrementalSync(platform, entityType, {
+      ...options,
+      forceFullSync: mode === 'full'
+    });
+  }
+}
+
+export default IncrementalSyncManager;

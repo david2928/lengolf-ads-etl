@@ -1,0 +1,333 @@
+name: ETL Incremental Data Sync
+
+on:
+  schedule:
+    # Run every 2 hours during business hours (UTC)
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Platform to sync (google, meta, or all)'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+        - all
+        - google
+        - meta
+      force_full_sync:
+        description: 'Force full sync instead of incremental'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  setup-etl-service:
+    name: Setup ETL Environment
+    runs-on: ubuntu-latest
+    outputs:
+      service-port: ${{ steps.setup.outputs.port }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+
+      - name: Setup environment variables
+        id: setup
+        run: |
+          echo "PORT=8080" >> $GITHUB_ENV
+          echo "NODE_ENV=production" >> $GITHUB_ENV
+          echo "LOG_LEVEL=info" >> $GITHUB_ENV
+          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_KEY=${{ secrets.SUPABASE_SERVICE_KEY }}" >> $GITHUB_ENV
+          echo "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}" >> $GITHUB_ENV
+          echo "GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" >> $GITHUB_ENV
+          echo "GOOGLE_CUSTOMER_ID=${{ secrets.GOOGLE_CUSTOMER_ID }}" >> $GITHUB_ENV
+          echo "GOOGLE_DEVELOPER_TOKEN=${{ secrets.GOOGLE_DEVELOPER_TOKEN }}" >> $GITHUB_ENV
+          echo "META_APP_ID=${{ secrets.META_APP_ID }}" >> $GITHUB_ENV
+          echo "META_APP_SECRET=${{ secrets.META_APP_SECRET }}" >> $GITHUB_ENV
+          echo "META_AD_ACCOUNT_ID=${{ secrets.META_AD_ACCOUNT_ID }}" >> $GITHUB_ENV
+          echo "ETL_API_KEY=${{ secrets.ETL_API_KEY }}" >> $GITHUB_ENV
+          echo "port=8080" >> $GITHUB_OUTPUT
+
+      - name: Start ETL service
+        run: |
+          echo "🚀 Starting ETL service in background..."
+          npm start &
+          ETL_PID=$!
+          echo "ETL_PID=$ETL_PID" >> $GITHUB_ENV
+          
+          # Wait for service to be ready
+          echo "⏳ Waiting for ETL service to start..."
+          for i in {1..30}; do
+            if curl -f http://localhost:8080/health >/dev/null 2>&1; then
+              echo "✅ ETL service is ready!"
+              break
+            fi
+            echo "Waiting... ($i/30)"
+            sleep 2
+          done
+          
+          if ! curl -f http://localhost:8080/health >/dev/null 2>&1; then
+            echo "❌ ETL service failed to start"
+            exit 1
+          fi
+
+      - name: Sync Meta Ads Data
+        if: ${{ github.event.inputs.platform == 'meta' || github.event.inputs.platform == 'all' || github.event.schedule }}
+        run: |
+          echo "📱 Syncing Meta Ads data..."
+          
+          # Determine sync mode
+          if [ "${{ github.event.inputs.force_full_sync }}" = "true" ]; then
+            SYNC_MODE="full"
+          else
+            SYNC_MODE="incremental"
+          fi
+          
+          # Sync Meta campaigns
+          echo "🔄 Syncing Meta campaigns..."
+          CAMPAIGN_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ETL_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"platform\": \"meta\", \"mode\": \"$SYNC_MODE\", \"entities\": [\"campaigns\"]}" \
+            http://localhost:8080/api/sync)
+          
+          CAMPAIGN_HTTP_CODE=${CAMPAIGN_RESPONSE: -3}
+          CAMPAIGN_BODY=${CAMPAIGN_RESPONSE%???}
+          
+          if [ "$CAMPAIGN_HTTP_CODE" != "200" ]; then
+            echo "❌ Meta campaigns sync failed with HTTP $CAMPAIGN_HTTP_CODE"
+            echo "$CAMPAIGN_BODY"
+            exit 1
+          fi
+          
+          echo "✅ Meta campaigns synced successfully"
+          echo "$CAMPAIGN_BODY" | jq -r '.summary.totalRecordsProcessed + " records processed"'
+          
+          # Small delay to avoid rate limiting
+          sleep 5
+          
+          # Sync Meta adsets
+          echo "🔄 Syncing Meta adsets..."
+          ADSET_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ETL_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"platform\": \"meta\", \"mode\": \"$SYNC_MODE\", \"entities\": [\"adsets\"]}" \
+            http://localhost:8080/api/sync)
+          
+          ADSET_HTTP_CODE=${ADSET_RESPONSE: -3}
+          ADSET_BODY=${ADSET_RESPONSE%???}
+          
+          if [ "$ADSET_HTTP_CODE" != "200" ]; then
+            echo "❌ Meta adsets sync failed with HTTP $ADSET_HTTP_CODE"
+            echo "$ADSET_BODY"
+            exit 1
+          fi
+          
+          echo "✅ Meta adsets synced successfully"
+          echo "$ADSET_BODY" | jq -r '.summary.totalRecordsProcessed + " records processed"'
+          
+          sleep 5
+          
+          # Sync Meta ads
+          echo "🔄 Syncing Meta ads..."
+          ADS_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ETL_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"platform\": \"meta\", \"mode\": \"$SYNC_MODE\", \"entities\": [\"ads\"]}" \
+            http://localhost:8080/api/sync)
+          
+          ADS_HTTP_CODE=${ADS_RESPONSE: -3}
+          ADS_BODY=${ADS_RESPONSE%???}
+          
+          if [ "$ADS_HTTP_CODE" != "200" ]; then
+            echo "❌ Meta ads sync failed with HTTP $ADS_HTTP_CODE"
+            echo "$ADS_BODY"
+            exit 1
+          fi
+          
+          echo "✅ Meta ads synced successfully"
+          echo "$ADS_BODY" | jq -r '.summary.totalRecordsProcessed + " records processed"'
+          
+          sleep 10
+          
+          # Sync Meta performance insights
+          echo "🔄 Syncing Meta performance insights..."
+          INSIGHTS_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ETL_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"platform\": \"meta\", \"mode\": \"$SYNC_MODE\", \"entities\": [\"insights\"]}" \
+            http://localhost:8080/api/sync)
+          
+          INSIGHTS_HTTP_CODE=${INSIGHTS_RESPONSE: -3}
+          INSIGHTS_BODY=${INSIGHTS_RESPONSE%???}
+          
+          if [ "$INSIGHTS_HTTP_CODE" != "200" ]; then
+            echo "❌ Meta insights sync failed with HTTP $INSIGHTS_HTTP_CODE"
+            echo "$INSIGHTS_BODY"
+            exit 1
+          fi
+          
+          echo "✅ Meta insights synced successfully"
+          echo "$INSIGHTS_BODY" | jq -r '.summary.totalRecordsProcessed + " records processed"'
+
+      - name: Sync Google Ads Data
+        if: ${{ github.event.inputs.platform == 'google' || github.event.inputs.platform == 'all' || github.event.schedule }}
+        run: |
+          echo "🔍 Syncing Google Ads data..."
+          
+          # Determine sync mode
+          if [ "${{ github.event.inputs.force_full_sync }}" = "true" ]; then
+            SYNC_MODE="full"
+          else
+            SYNC_MODE="incremental"
+          fi
+          
+          # Sync Google campaigns
+          echo "🔄 Syncing Google campaigns..."
+          CAMPAIGN_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ETL_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"platform\": \"google\", \"mode\": \"$SYNC_MODE\", \"entities\": [\"campaigns\"]}" \
+            http://localhost:8080/api/sync)
+          
+          CAMPAIGN_HTTP_CODE=${CAMPAIGN_RESPONSE: -3}
+          CAMPAIGN_BODY=${CAMPAIGN_RESPONSE%???}
+          
+          if [ "$CAMPAIGN_HTTP_CODE" != "200" ]; then
+            echo "❌ Google campaigns sync failed with HTTP $CAMPAIGN_HTTP_CODE"
+            echo "$CAMPAIGN_BODY"
+            exit 1
+          fi
+          
+          echo "✅ Google campaigns synced successfully"
+          echo "$CAMPAIGN_BODY" | jq -r '.summary.totalRecordsProcessed + " records processed"'
+          
+          sleep 5
+          
+          # Sync Google ad groups
+          echo "🔄 Syncing Google ad groups..."
+          ADGROUP_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ETL_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"platform\": \"google\", \"mode\": \"$SYNC_MODE\", \"entities\": [\"ad_groups\"]}" \
+            http://localhost:8080/api/sync)
+          
+          ADGROUP_HTTP_CODE=${ADGROUP_RESPONSE: -3}
+          ADGROUP_BODY=${ADGROUP_RESPONSE%???}
+          
+          if [ "$ADGROUP_HTTP_CODE" != "200" ]; then
+            echo "❌ Google ad groups sync failed with HTTP $ADGROUP_HTTP_CODE"
+            echo "$ADGROUP_BODY"
+            exit 1
+          fi
+          
+          echo "✅ Google ad groups synced successfully"
+          echo "$ADGROUP_BODY" | jq -r '.summary.totalRecordsProcessed + " records processed"'
+          
+          sleep 5
+          
+          # Sync Google ads
+          echo "🔄 Syncing Google ads..."
+          ADS_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ETL_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"platform\": \"google\", \"mode\": \"$SYNC_MODE\", \"entities\": [\"ads\"]}" \
+            http://localhost:8080/api/sync)
+          
+          ADS_HTTP_CODE=${ADS_RESPONSE: -3}
+          ADS_BODY=${ADS_RESPONSE%???}
+          
+          if [ "$ADS_HTTP_CODE" != "200" ]; then
+            echo "❌ Google ads sync failed with HTTP $ADS_HTTP_CODE"
+            echo "$ADS_BODY"
+            exit 1
+          fi
+          
+          echo "✅ Google ads synced successfully"
+          echo "$ADS_BODY" | jq -r '.summary.totalRecordsProcessed + " records processed"'
+          
+          sleep 5
+          
+          # Sync Google keywords
+          echo "🔄 Syncing Google keywords..."
+          KEYWORDS_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ETL_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"platform\": \"google\", \"mode\": \"$SYNC_MODE\", \"entities\": [\"keywords\"]}" \
+            http://localhost:8080/api/sync)
+          
+          KEYWORDS_HTTP_CODE=${KEYWORDS_RESPONSE: -3}
+          KEYWORDS_BODY=${KEYWORDS_RESPONSE%???}
+          
+          if [ "$KEYWORDS_HTTP_CODE" != "200" ]; then
+            echo "❌ Google keywords sync failed with HTTP $KEYWORDS_HTTP_CODE"
+            echo "$KEYWORDS_BODY"
+            exit 1
+          fi
+          
+          echo "✅ Google keywords synced successfully"
+          echo "$KEYWORDS_BODY" | jq -r '.summary.totalRecordsProcessed + " records processed"'
+          
+          sleep 10
+          
+          # Sync Google performance data
+          echo "🔄 Syncing Google performance data..."
+          PERFORMANCE_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ETL_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"platform\": \"google\", \"mode\": \"$SYNC_MODE\", \"entities\": [\"performance\"]}" \
+            http://localhost:8080/api/sync)
+          
+          PERFORMANCE_HTTP_CODE=${PERFORMANCE_RESPONSE: -3}
+          PERFORMANCE_BODY=${PERFORMANCE_RESPONSE%???}
+          
+          if [ "$PERFORMANCE_HTTP_CODE" != "200" ]; then
+            echo "❌ Google performance sync failed with HTTP $PERFORMANCE_HTTP_CODE"
+            echo "$PERFORMANCE_BODY"
+            exit 1
+          fi
+          
+          echo "✅ Google performance synced successfully"
+          echo "$PERFORMANCE_BODY" | jq -r '.summary.totalRecordsProcessed + " records processed"'
+
+      - name: Generate Sync Summary
+        if: always()
+        run: |
+          echo "📊 ETL Incremental Sync Summary"
+          echo "==============================="
+          echo "Date: $(date '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "Platform: ${{ github.event.inputs.platform || 'all' }}"
+          echo "Mode: ${{ github.event.inputs.force_full_sync == 'true' && 'full' || 'incremental' }}"
+          echo "Trigger: ${{ github.event_name }}"
+          echo ""
+          
+          # Check if ETL service is still running
+          if curl -f http://localhost:8080/health >/dev/null 2>&1; then
+            echo "✅ ETL service is healthy"
+            
+            # Get final status
+            STATUS_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.ETL_API_KEY }}" \
+              http://localhost:8080/api/status 2>/dev/null || echo '{"error": "Status unavailable"}')
+            
+            echo "📈 Final Status:"
+            echo "$STATUS_RESPONSE" | jq '.' 2>/dev/null || echo "$STATUS_RESPONSE"
+          else
+            echo "⚠️ ETL service is not responding"
+          fi
+          
+          echo ""
+          echo "🎯 Incremental sync completed!"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "🧹 Cleaning up ETL service..."
+          if [ -n "$ETL_PID" ]; then
+            kill $ETL_PID 2>/dev/null || true
+            echo "ETL service stopped"
+          fi

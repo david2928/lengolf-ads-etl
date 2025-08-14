@@ -1,0 +1,248 @@
+name: ETL Daily Full Sync
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC (9 AM Thailand time)
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      sync_historical:
+        description: 'Include historical data sync (last 7 days)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  ETL_SERVICE_URL: ${{ secrets.ETL_SERVICE_URL }}
+  ETL_API_KEY: ${{ secrets.ETL_API_KEY }}
+
+jobs:
+  health-check:
+    name: ETL Service Health Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Check ETL Service Health
+        run: |
+          echo "🔍 Checking ETL service health..."
+          
+          HEALTH_RESPONSE=$(curl -s -w "%{http_code}" "$ETL_SERVICE_URL/health")
+          HTTP_CODE=${HEALTH_RESPONSE: -3}
+          HEALTH_BODY=${HEALTH_RESPONSE%???}
+          
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ ETL service health check failed with HTTP $HTTP_CODE"
+            echo "$HEALTH_BODY"
+            exit 1
+          fi
+          
+          echo "✅ ETL service is healthy"
+          echo "$HEALTH_BODY" | jq '.'
+
+  full-dimensional-sync:
+    name: Full Dimensional Data Sync
+    runs-on: ubuntu-latest
+    needs: health-check
+    
+    steps:
+      - name: Sync All Dimensional Data
+        run: |
+          echo "🔄 Starting full dimensional data sync..."
+          
+          # Meta dimensional data
+          echo "📱 Syncing Meta dimensional data..."
+          
+          for entity in campaigns adsets ads; do
+            echo "Syncing Meta $entity..."
+            
+            RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"platform\": \"meta\", \"mode\": \"full\", \"entities\": [\"$entity\"]}" \
+              "$ETL_SERVICE_URL/api/sync")
+            
+            HTTP_CODE=${RESPONSE: -3}
+            BODY=${RESPONSE%???}
+            
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "❌ Meta $entity sync failed with HTTP $HTTP_CODE"
+              echo "$BODY"
+              exit 1
+            fi
+            
+            echo "✅ Meta $entity sync completed"
+            # Add small delay to avoid rate limiting
+            sleep 10
+          done
+          
+          # Google dimensional data
+          echo "🔍 Syncing Google dimensional data..."
+          
+          for entity in campaigns ad_groups ads keywords; do
+            echo "Syncing Google $entity..."
+            
+            RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"platform\": \"google\", \"mode\": \"full\", \"entities\": [\"$entity\"]}" \
+              "$ETL_SERVICE_URL/api/sync")
+            
+            HTTP_CODE=${RESPONSE: -3}
+            BODY=${RESPONSE%???}
+            
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "❌ Google $entity sync failed with HTTP $HTTP_CODE"
+              echo "$BODY"
+              exit 1
+            fi
+            
+            echo "✅ Google $entity sync completed"
+            # Add small delay to avoid rate limiting
+            sleep 10
+          done
+          
+          echo "✅ All dimensional data sync completed"
+
+  performance-data-sync:
+    name: Performance Data Sync
+    runs-on: ubuntu-latest
+    needs: full-dimensional-sync
+    
+    steps:
+      - name: Sync Performance Data
+        run: |
+          echo "📊 Starting performance data sync..."
+          
+          # Determine date range for historical sync
+          if [ "${{ github.event.inputs.sync_historical }}" = "true" ]; then
+            START_DATE=$(date -d '7 days ago' '+%Y-%m-%d')
+            END_DATE=$(date '+%Y-%m-%d')
+            echo "🕐 Syncing historical data from $START_DATE to $END_DATE"
+            SYNC_PAYLOAD="{\"platform\": \"meta\", \"mode\": \"full\", \"entities\": [\"insights\"], \"startDate\": \"$START_DATE\", \"endDate\": \"$END_DATE\"}"
+          else
+            echo "🕐 Syncing incremental performance data"
+            SYNC_PAYLOAD='{"platform": "meta", "mode": "incremental", "entities": ["insights"]}'
+          fi
+          
+          # Meta performance sync
+          echo "📱 Syncing Meta performance data..."
+          
+          META_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$SYNC_PAYLOAD" \
+            "$ETL_SERVICE_URL/api/sync")
+          
+          META_HTTP_CODE=${META_RESPONSE: -3}
+          META_BODY=${META_RESPONSE%???}
+          
+          if [ "$META_HTTP_CODE" != "200" ]; then
+            echo "❌ Meta performance sync failed with HTTP $META_HTTP_CODE"
+            echo "$META_BODY"
+            exit 1
+          fi
+          
+          echo "✅ Meta performance sync completed"
+          echo "$META_BODY" | jq '.summary'
+          
+          # Google performance sync
+          echo "🔍 Syncing Google performance data..."
+          
+          if [ "${{ github.event.inputs.sync_historical }}" = "true" ]; then
+            GOOGLE_PAYLOAD="{\"platform\": \"google\", \"mode\": \"full\", \"entities\": [\"performance\"], \"startDate\": \"$START_DATE\", \"endDate\": \"$END_DATE\"}"
+          else
+            GOOGLE_PAYLOAD='{"platform": "google", "mode": "incremental", "entities": ["performance"]}'
+          fi
+          
+          GOOGLE_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$GOOGLE_PAYLOAD" \
+            "$ETL_SERVICE_URL/api/sync")
+          
+          GOOGLE_HTTP_CODE=${GOOGLE_RESPONSE: -3}
+          GOOGLE_BODY=${GOOGLE_RESPONSE%???}
+          
+          if [ "$GOOGLE_HTTP_CODE" != "200" ]; then
+            echo "❌ Google performance sync failed with HTTP $GOOGLE_HTTP_CODE"
+            echo "$GOOGLE_BODY"
+            exit 1
+          fi
+          
+          echo "✅ Google performance sync completed"
+          echo "$GOOGLE_BODY" | jq '.summary'
+
+  data-quality-check:
+    name: Data Quality Verification
+    runs-on: ubuntu-latest
+    needs: performance-data-sync
+    
+    steps:
+      - name: Verify Data Quality
+        run: |
+          echo "🔍 Running data quality checks..."
+          
+          # Check ETL status endpoint
+          STATUS_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
+            "$ETL_SERVICE_URL/api/status")
+          
+          STATUS_HTTP_CODE=${STATUS_RESPONSE: -3}
+          STATUS_BODY=${STATUS_RESPONSE%???}
+          
+          if [ "$STATUS_HTTP_CODE" != "200" ]; then
+            echo "❌ Status check failed with HTTP $STATUS_HTTP_CODE"
+            echo "$STATUS_BODY"
+            exit 1
+          fi
+          
+          echo "✅ ETL status check passed"
+          echo "$STATUS_BODY" | jq '.'
+          
+          # Check metrics endpoint for data freshness
+          METRICS_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
+            "$ETL_SERVICE_URL/api/metrics")
+          
+          METRICS_HTTP_CODE=${METRICS_RESPONSE: -3}
+          METRICS_BODY=${METRICS_RESPONSE%???}
+          
+          if [ "$METRICS_HTTP_CODE" != "200" ]; then
+            echo "⚠️ Metrics check failed with HTTP $METRICS_HTTP_CODE"
+            echo "$METRICS_BODY"
+            # Don't fail the job for metrics, just warn
+          else
+            echo "✅ Metrics check passed"
+          fi
+
+  summary-report:
+    name: Generate Daily Summary
+    runs-on: ubuntu-latest
+    needs: [health-check, full-dimensional-sync, performance-data-sync, data-quality-check]
+    if: always()
+    
+    steps:
+      - name: Generate Summary Report
+        run: |
+          echo "📋 Daily ETL Sync Summary Report"
+          echo "================================="
+          echo "Date: $(date '+%Y-%m-%d %H:%M:%S UTC')"
+          echo ""
+          echo "Job Results:"
+          echo "- Health Check: ${{ needs.health-check.result }}"
+          echo "- Dimensional Sync: ${{ needs.full-dimensional-sync.result }}"
+          echo "- Performance Sync: ${{ needs.performance-data-sync.result }}"
+          echo "- Quality Check: ${{ needs.data-quality-check.result }}"
+          echo ""
+          
+          # Count failures
+          FAILURES=0
+          if [ "${{ needs.health-check.result }}" = "failure" ]; then ((FAILURES++)); fi
+          if [ "${{ needs.full-dimensional-sync.result }}" = "failure" ]; then ((FAILURES++)); fi
+          if [ "${{ needs.performance-data-sync.result }}" = "failure" ]; then ((FAILURES++)); fi
+          if [ "${{ needs.data-quality-check.result }}" = "failure" ]; then ((FAILURES++)); fi
+          
+          echo "Total Failures: $FAILURES"
+          echo ""
+          
+          if [ $FAILURES -eq 0 ]; then
+            echo "✅ All ETL jobs completed successfully!"
+            echo "🎯 Lengolf Ads data is up to date and ready for use."
+          else
+            echo "❌ $FAILURES job(s) failed. Please check the logs above."
+            exit 1
+          fi
