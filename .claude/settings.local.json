@@ -31,7 +31,9 @@
       "Bash(grep:*)",
       "Bash(touch:*)",
       "Bash(git commit:*)",
-      "Bash(yamllint:*)"
+      "Bash(yamllint:*)",
+      "Bash(cat:*)",
+      "Bash(mv:*)"
     ],
     "deny": [],
     "ask": []
