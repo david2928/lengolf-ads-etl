@@ -314,4 +314,91 @@ router.post('/debug/gaql', asyncHandler(async (req: Request, res: Response) => {
   }
 }));
 
+// Status endpoint for monitoring
+router.get('/status', asyncHandler(async (req: Request, res: Response) => {
+  try {
+    // Get recent sync batch information
+    const recentBatches = await (async () => {
+      try {
+        const SupabaseLoader = (await import('@/loaders/supabase-client')).default;
+        const supabase = new SupabaseLoader();
+        
+        // Query recent sync batches from the last 24 hours
+        const { data } = await supabase.getClient()
+          .schema('marketing')
+          .from('etl_sync_log')
+          .select('*')
+          .gte('started_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+          .order('started_at', { ascending: false })
+          .limit(10);
+        
+        return data || [];
+      } catch (error) {
+        logger.warn('Could not fetch recent sync batches', { error: error.message });
+        return [];
+      }
+    })();
+
+    // Get data freshness information
+    const dataFreshness = await (async () => {
+      try {
+        const SupabaseLoader = (await import('@/loaders/supabase-client')).default;
+        const supabase = new SupabaseLoader();
+        
+        const tables = [
+          'google_ads_campaigns',
+          'google_ads_keywords', 
+          'google_ads_keyword_performance',
+          'meta_ads_campaigns',
+          'meta_ads_ads'
+        ];
+        
+        const freshness = {};
+        for (const table of tables) {
+          try {
+            const { data } = await supabase.getClient()
+              .schema('marketing')
+              .from(table)
+              .select('updated_at')
+              .order('updated_at', { ascending: false })
+              .limit(1);
+            
+            freshness[table] = data?.[0]?.updated_at || null;
+          } catch (error) {
+            freshness[table] = null;
+          }
+        }
+        
+        return freshness;
+      } catch (error) {
+        logger.warn('Could not fetch data freshness', { error: error.message });
+        return {};
+      }
+    })();
+
+    const status = {
+      service: 'lengolf-ads-etl',
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      version: '1.0.0',
+      recentSyncs: recentBatches.length,
+      lastSyncTime: recentBatches[0]?.started_at || null,
+      dataFreshness
+    };
+
+    res.json(status);
+
+  } catch (error) {
+    logger.error('Status endpoint failed', { error: error.message });
+    
+    res.status(500).json({
+      service: 'lengolf-ads-etl',
+      status: 'degraded',
+      timestamp: new Date().toISOString(),
+      error: error.message
+    });
+  }
+}));
+
 export default router;
