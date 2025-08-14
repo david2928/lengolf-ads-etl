@@ -114,7 +114,7 @@ jobs:
           fi
           
           echo "✅ Meta campaigns synced successfully"
-          echo "$CAMPAIGN_BODY" | jq -r '.summary.totalRecordsProcessed + " records processed"'
+          echo "$CAMPAIGN_BODY" | jq -r '(.summary.totalRecordsProcessed // 0) | tostring + " records processed"'
           
           # Small delay to avoid rate limiting
           sleep 5
@@ -136,7 +136,7 @@ jobs:
           fi
           
           echo "✅ Meta adsets synced successfully"
-          echo "$ADSET_BODY" | jq -r '.summary.totalRecordsProcessed + " records processed"'
+          echo "$ADSET_BODY" | jq -r '(.summary.totalRecordsProcessed // 0) | tostring + " records processed"'
           
           sleep 5
           
@@ -157,7 +157,7 @@ jobs:
           fi
           
           echo "✅ Meta ads synced successfully"
-          echo "$ADS_BODY" | jq -r '.summary.totalRecordsProcessed + " records processed"'
+          echo "$ADS_BODY" | jq -r '(.summary.totalRecordsProcessed // 0) | tostring + " records processed"'
           
           sleep 10
           
@@ -178,7 +178,7 @@ jobs:
           fi
           
           echo "✅ Meta insights synced successfully"
-          echo "$INSIGHTS_BODY" | jq -r '.summary.totalRecordsProcessed + " records processed"'
+          echo "$INSIGHTS_BODY" | jq -r '(.summary.totalRecordsProcessed // 0) | tostring + " records processed"'
 
       - name: Sync Google Ads Data
         if: ${{ github.event.inputs.platform == 'google' || github.event.inputs.platform == 'all' || github.event.schedule }}
@@ -209,7 +209,7 @@ jobs:
           fi
           
           echo "✅ Google campaigns synced successfully"
-          echo "$CAMPAIGN_BODY" | jq -r '.summary.totalRecordsProcessed + " records processed"'
+          echo "$CAMPAIGN_BODY" | jq -r '(.summary.totalRecordsProcessed // 0) | tostring + " records processed"'
           
           sleep 5
           
@@ -230,7 +230,7 @@ jobs:
           fi
           
           echo "✅ Google ad groups synced successfully"
-          echo "$ADGROUP_BODY" | jq -r '.summary.totalRecordsProcessed + " records processed"'
+          echo "$ADGROUP_BODY" | jq -r '(.summary.totalRecordsProcessed // 0) | tostring + " records processed"'
           
           sleep 5
           
@@ -251,7 +251,7 @@ jobs:
           fi
           
           echo "✅ Google ads synced successfully"
-          echo "$ADS_BODY" | jq -r '.summary.totalRecordsProcessed + " records processed"'
+          echo "$ADS_BODY" | jq -r '(.summary.totalRecordsProcessed // 0) | tostring + " records processed"'
           
           sleep 5
           
@@ -272,7 +272,7 @@ jobs:
           fi
           
           echo "✅ Google keywords synced successfully"
-          echo "$KEYWORDS_BODY" | jq -r '.summary.totalRecordsProcessed + " records processed"'
+          echo "$KEYWORDS_BODY" | jq -r '(.summary.totalRecordsProcessed // 0) | tostring + " records processed"'
           
           sleep 10
           
@@ -293,7 +293,7 @@ jobs:
           fi
           
           echo "✅ Google performance synced successfully"
-          echo "$PERFORMANCE_BODY" | jq -r '.summary.totalRecordsProcessed + " records processed"'
+          echo "$PERFORMANCE_BODY" | jq -r '(.summary.totalRecordsProcessed // 0) | tostring + " records processed"'
 
       - name: Generate Sync Summary
         if: always()
