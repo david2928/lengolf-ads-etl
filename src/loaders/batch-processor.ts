@@ -218,6 +218,66 @@ export class BatchProcessor {
     }
   }
 
+  async processGoogleKeywords(keywords: any[], batchId?: string): Promise<BatchResult> {
+    try {
+      logger.info('Processing Google Ads keywords', {
+        keywordCount: keywords.length,
+        batchId
+      });
+
+      if (keywords.length === 0) {
+        return { inserted: 0, updated: 0, failed: 0 };
+      }
+
+      // Remove duplicates by keyword_id to prevent conflict errors
+      const uniqueKeywords = keywords.filter((keyword, index, self) => 
+        index === self.findIndex(k => k.keyword_id === keyword.keyword_id)
+      );
+
+      if (uniqueKeywords.length !== keywords.length) {
+        logger.warn('Removed duplicate keywords', {
+          original: keywords.length,
+          unique: uniqueKeywords.length,
+          duplicates: keywords.length - uniqueKeywords.length
+        });
+      }
+
+      const result = await this.supabase.bulkUpsert(
+        'google_ads_keywords',
+        uniqueKeywords,
+        'keyword_id'
+      );
+
+      if (batchId) {
+        await this.supabase.updateSyncBatch(batchId, {
+          records_processed: uniqueKeywords.length,
+          records_inserted: result.inserted,
+          records_updated: result.updated,
+          status: 'completed'
+        });
+      }
+
+      logger.info('Google keywords processed successfully', result);
+      return {
+        inserted: result.inserted,
+        updated: result.updated,
+        failed: 0
+      };
+
+    } catch (error) {
+      logger.error('Google keywords processing failed', { error: error.message });
+      
+      if (batchId) {
+        await this.supabase.updateSyncBatch(batchId, {
+          status: 'failed',
+          error_message: error.message
+        });
+      }
+      
+      throw error;
+    }
+  }
+
   async processCreativeAssets(assets: CreativeAsset[], batchId?: string): Promise<BatchResult> {
     try {
       logger.info('Processing creative assets', {

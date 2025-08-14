@@ -18,9 +18,8 @@ export class TokenManager {
         .single();
 
       if (error || !tokenData) {
-        logger.warn('Google token not found in database. Please set up OAuth tokens.');
-        // Return a placeholder to allow server to start
-        return 'placeholder_google_access_token';
+        logger.error('Google token not found in database. Please set up OAuth tokens.', { error: error?.message });
+        throw new Error('Google token not found in database. Please set up OAuth tokens.');
       }
 
       // Check if token is expired (with 5-minute buffer)

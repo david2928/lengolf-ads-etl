@@ -173,17 +173,22 @@ export class IncrementalSyncManager {
     batchId: string,
     options: any = {}
   ): Promise<any> {
+    logger.info('DEBUG: syncGoogleEntity called', { entityType, batchId });
     switch (entityType) {
       case 'campaigns':
+        logger.info('DEBUG: Routing to syncGoogleCampaigns');
         return this.syncGoogleCampaigns(syncParams, batchId);
       
       case 'ad_groups':
+        logger.info('DEBUG: Routing to syncGoogleAdGroups');
         return this.syncGoogleAdGroups(syncParams, batchId);
       
       case 'ads':
+        logger.info('DEBUG: Routing to syncGoogleAds');
         return this.syncGoogleAds(syncParams, batchId);
       
       case 'keywords':
+        logger.info('DEBUG: Routing to syncGoogleKeywords');
         return this.syncGoogleKeywords(syncParams, batchId);
       
       case 'performance':
@@ -298,17 +303,43 @@ export class IncrementalSyncManager {
 
   private async syncGoogleKeywords(syncParams: SyncParams, batchId: string): Promise<any> {
     try {
-      logger.info('Syncing Google Ads keywords', { 
+      logger.info('🔑 KEYWORD SYNC START', { 
         modifiedSince: syncParams.modifiedSince.toISOString(),
-        batchId 
+        batchId,
+        extractorType: this.googleExtractor.constructor.name
       });
 
-      // TODO: Implement keyword extraction in GoogleAdsExtractor
-      // For now, return empty result
-      return { inserted: 0, updated: 0, failed: 0 };
+      // Test if googleExtractor method exists and is callable
+      if (!this.googleExtractor.extractKeywords) {
+        logger.error('❌ extractKeywords method does not exist on googleExtractor');
+        return { inserted: 0, updated: 0, failed: 0 };
+      }
+
+      logger.info('🚀 Calling extractKeywords directly...');
+      
+      try {
+        const keywords = await this.googleExtractor.extractKeywords(undefined, syncParams.modifiedSince);
+        logger.info('DEBUG: extractKeywords returned', { keywordCount: keywords.length });
+        
+        const result = await this.batchProcessor.processGoogleKeywords(keywords, batchId);
+        logger.info('DEBUG: processGoogleKeywords returned', { result });
+
+        logger.info('Google keywords sync completed', {
+          keywordCount: keywords.length,
+          result
+        });
+
+        return result;
+      } catch (innerError) {
+        logger.error('DEBUG: Error during keyword extraction/processing', { 
+          error: innerError.message, 
+          stack: innerError.stack 
+        });
+        throw innerError;
+      }
 
     } catch (error) {
-      logger.error('Google keywords sync failed', { error: error.message });
+      logger.error('Google keywords sync failed', { error: error.message, stack: error.stack });
       throw error;
     }
   }

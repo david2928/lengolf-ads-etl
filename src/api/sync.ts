@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { asyncHandler } from '@/api/middleware/error-handler';
 import IncrementalSyncManager from '@/loaders/incremental-sync';
+import GoogleAdsClient from '@/extractors/google/client';
 import logger from '@/utils/logger';
 import { SyncRequest } from '@/utils/types';
 
@@ -265,6 +266,49 @@ router.post('/auth/refresh', asyncHandler(async (req: Request, res: Response) =>
       success: false,
       platform,
       error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+}));
+
+// Debug GAQL query endpoint
+router.post('/debug/gaql', asyncHandler(async (req: Request, res: Response) => {
+  const { query } = req.body;
+
+  if (!query) {
+    return res.status(400).json({
+      success: false,
+      error: 'GAQL query is required'
+    });
+  }
+
+  try {
+    const client = new GoogleAdsClient();
+    const startTime = Date.now();
+    const results = await client.executeQuery(query);
+    const duration = Date.now() - startTime;
+
+    res.json({
+      success: true,
+      query: query.substring(0, 200) + '...',
+      resultCount: results.length,
+      duration,
+      sampleResult: results.length > 0 ? results[0] : null,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    logger.error('Debug GAQL query failed', { 
+      query: query.substring(0, 200),
+      error: error.message,
+      fullError: error 
+    });
+    
+    res.status(500).json({
+      success: false,
+      query: query.substring(0, 200) + '...',
+      error: error.message,
+      errorType: error.constructor?.name,
       timestamp: new Date().toISOString()
     });
   }

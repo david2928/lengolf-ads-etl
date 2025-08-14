@@ -89,22 +89,48 @@ export class GoogleAdsClient {
 
     } catch (error) {
       const errorMessage = getErrorMessage(error);
+      
+      // Extract more detailed Google Ads error information
+      let detailedError = errorMessage;
+      if (error && typeof error === 'object') {
+        const errorObj = error as any;
+        if (errorObj.errors && Array.isArray(errorObj.errors)) {
+          // Google Ads API error format
+          detailedError = errorObj.errors.map((e: any) => 
+            `${e.error_code ? Object.keys(e.error_code)[0] + ': ' : ''}${e.message}`
+          ).join('; ');
+        } else if (errorObj.details) {
+          detailedError = errorObj.details;
+        }
+      }
+      
       logger.error('Google Ads query failed', { 
-        error: errorMessage,
+        error: detailedError,
+        originalError: errorMessage,
         fullError: error,
         query: query.substring(0, 100) + '...'
       });
 
       // If authentication error, try to refresh token and retry once
-      if (errorMessage.includes('AUTHENTICATION_ERROR') || errorMessage.includes('UNAUTHENTICATED')) {
-        logger.info('Authentication error detected, attempting token refresh...');
+      if (errorMessage.includes('AUTHENTICATION_ERROR') || 
+          errorMessage.includes('UNAUTHENTICATED') ||
+          errorMessage.includes('invalid_grant') ||
+          errorMessage.includes('unauthorized_client')) {
+        logger.info('Authentication error detected, attempting to reinitialize client...', { 
+          errorType: errorMessage.substring(0, 100) 
+        });
         try {
+          // Force reinitialization
+          this.initialized = false;
           await this.initializeClient();
           const results = await this.customer.query(query, options);
-          logger.info('Query succeeded after token refresh');
+          logger.info('Query succeeded after client reinitialization');
           return results;
         } catch (retryError) {
-          logger.error('Query failed even after token refresh', { error: getErrorMessage(retryError) });
+          logger.error('Query failed even after client reinitialization', { 
+            error: getErrorMessage(retryError),
+            originalError: errorMessage 
+          });
           throw retryError;
         }
       }
@@ -154,7 +180,6 @@ export class GoogleAdsClient {
         ad_group.name,
         ad_group.status,
         ad_group.type,
-        ad_group.target_cpa_micros,
         ad_group.cpm_bid_micros,
         ad_group.cpc_bid_micros,
         ad_group.percent_cpc_bid_micros,
@@ -187,7 +212,6 @@ export class GoogleAdsClient {
         ad_group_ad.ad.responsive_search_ad.descriptions,
         ad_group_ad.ad.responsive_search_ad.path1,
         ad_group_ad.ad.responsive_search_ad.path2,
-        ad_group_ad.ad_strength,
         ad_group.id,
         campaign.id
       FROM ad_group_ad 
@@ -199,16 +223,14 @@ export class GoogleAdsClient {
   }
 
   async getKeywords(adGroupIds?: string[], modifiedSince?: Date): Promise<any[]> {
-    let whereClause = `WHERE ad_group_criterion.status != 'REMOVED' AND ad_group_criterion.type = 'KEYWORD'`;
+    let whereClause = `WHERE ad_group_criterion.status IN ('ENABLED', 'PAUSED') AND ad_group_criterion.type = 'KEYWORD'`;
     
     if (adGroupIds && adGroupIds.length > 0) {
       const adGroupFilter = adGroupIds.map(id => `'customers/${appConfig.googleCustomerId}/adGroups/${id}'`).join(',');
       whereClause += ` AND ad_group.resource_name IN (${adGroupFilter})`;
     }
     
-    if (modifiedSince) {
-      whereClause += ` AND segments.date >= '${modifiedSince.toISOString().split('T')[0]}'`;
-    }
+    // Note: Keywords are entity metadata, not time-series data, so no date filter needed
 
     const query = `
       SELECT 

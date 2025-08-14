@@ -408,6 +408,41 @@ export class GoogleAdsExtractor {
     }
   }
 
+  async extractKeywords(adGroupIds?: string[], modifiedSince?: Date): Promise<any[]> {
+    try {
+      logger.info('Extracting Google Ads keywords', {
+        adGroupCount: adGroupIds?.length || 'all',
+        modifiedSince: modifiedSince?.toISOString()
+      });
+
+      logger.info('DEBUG: About to call client.getKeywords');
+      const keywords = await this.client.getKeywords(adGroupIds, modifiedSince);
+      logger.info('DEBUG: client.getKeywords returned', { keywordCount: keywords.length });
+      
+      return keywords.map(keywordData => {
+        const keyword = keywordData.ad_group_criterion;
+        const adGroup = keywordData.ad_group;
+        const campaign = keywordData.campaign;
+        
+        return {
+          keyword_id: keyword.criterion_id,
+          ad_group_id: adGroup.id,
+          campaign_id: campaign.id,
+          keyword_text: keyword.keyword?.text || '',
+          keyword_match_type: keyword.keyword?.match_type || '',
+          keyword_status: keyword.status,
+          max_cpc_micros: keyword.cpc_bid_micros || null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+      });
+
+    } catch (error) {
+      logger.error('Failed to extract Google Ads keywords', { error: getErrorMessage(error) });
+      throw error;
+    }
+  }
+
   private extractBudgetAmount(budgetResourceName: string): number | null {
     // This would require an additional API call to get budget details
     // For now, return null and implement budget extraction separately if needed
