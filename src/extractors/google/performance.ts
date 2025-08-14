@@ -272,7 +272,7 @@ export class GoogleAdsPerformanceExtractor {
         const data: GoogleAdsPMaxPerformance = {
           campaign_id: parseInt(row.campaign?.id?.toString() || '0'),
           asset_group_id: row.asset_group?.id ? parseInt(row.asset_group.id.toString()) : null,
-          listing_group_id: row.shopping_performance_view?.listing_group_id ? parseInt(row.shopping_performance_view.listing_group_id.toString()) : null,
+          listing_group_id: (row.shopping_performance_view as any)?.listing_group_id ? parseInt((row.shopping_performance_view as any).listing_group_id.toString()) : null,
           date: row.segments?.date || '',
           impressions: parseInt(row.metrics?.impressions?.toString() || '0'),
           clicks: parseInt(row.metrics?.clicks?.toString() || '0'),

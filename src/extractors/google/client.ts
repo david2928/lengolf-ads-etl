@@ -45,8 +45,7 @@ export class GoogleAdsClient {
       this.client = new GoogleAdsApi({
         client_id: appConfig.googleClientId,
         client_secret: appConfig.googleClientSecret,
-        developer_token: appConfig.googleDeveloperToken,
-        api_version: 'v21'
+        developer_token: appConfig.googleDeveloperToken
       });
 
       // Set up customer with refresh token (Google Ads API manages access token internally)

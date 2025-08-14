@@ -192,7 +192,7 @@ export class MetaAdsClient {
     try {
       logger.info('Fetching Meta ad account information');
       const response = await this.httpClient.get(
-        `/act_${appConfig.meta.adAccountId}`,
+        `/act_${appConfig.metaAdAccountId}`,
         {
           params: {
             fields: 'account_id,name,currency,timezone_name,account_status'
@@ -604,10 +604,11 @@ export class MetaAdsClient {
       });
       
       if (response.data) {
+        const accountData = Array.isArray(response.data) ? response.data[0] : response.data;
         logger.info('Meta Ads connection test successful', {
-          accountId: response.data.id,
-          accountName: response.data.name,
-          status: response.data.account_status
+          accountId: accountData.id,
+          accountName: accountData.name,
+          status: accountData.account_status
         });
         return true;
       }
