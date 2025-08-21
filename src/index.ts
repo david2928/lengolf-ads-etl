@@ -7,18 +7,23 @@ import helmet from 'helmet';
 import compression from 'compression';
 import { appConfig } from '@/utils/config';
 import logger from '@/utils/logger';
+import TokenHealthScheduler from '@/scheduler/token-health-scheduler';
 
 // Import routes
 import healthRouter from '@/api/health';
 import syncRouter from '@/api/sync';
 import statusRouter from '@/api/status';
 import metricsRouter from '@/api/metrics';
+import tokenHealthRouter from '@/api/token-health';
 
 // Import middleware
 import { authMiddleware } from '@/api/middleware/auth';
 import { errorHandler } from '@/api/middleware/error-handler';
 
 const app = express();
+
+// Initialize token health scheduler
+const tokenHealthScheduler = new TokenHealthScheduler();
 
 // Security middleware
 app.use(helmet());
@@ -46,6 +51,7 @@ app.use((req, res, next) => {
 
 // Routes
 app.use('/health', healthRouter);
+app.use('/api/token-health', authMiddleware, tokenHealthRouter);
 app.use('/api', authMiddleware, syncRouter);
 app.use('/api', authMiddleware, statusRouter);
 app.use('/api', authMiddleware, metricsRouter);
@@ -79,6 +85,14 @@ const server = app.listen(appConfig.port, () => {
     environment: appConfig.nodeEnv,
     version: process.env.npm_package_version || '1.0.0'
   });
+
+  // Start token health monitoring
+  try {
+    tokenHealthScheduler.start();
+    logger.info('✅ Token health monitoring started');
+  } catch (error) {
+    logger.error('❌ Failed to start token health monitoring', { error });
+  }
 });
 
 // Handle server errors

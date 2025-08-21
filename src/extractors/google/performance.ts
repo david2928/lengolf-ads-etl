@@ -42,6 +42,41 @@ export interface GoogleAdsPMaxPerformance {
   view_through_conversions: number;
 }
 
+export interface GoogleAdsAdPerformance {
+  ad_id: string;
+  ad_group_id: string;
+  campaign_id: string;
+  date: string;
+  impressions: number;
+  clicks: number;
+  cost_micros: number;
+  conversions: number;
+  conversion_value_micros: number;
+  ctr: number;
+  avg_cpc_micros: number;
+  avg_cpm_micros: number;
+  view_through_conversions: number;
+  video_views: number;
+  video_view_rate: number;
+}
+
+export interface GoogleAdsAssetPerformance {
+  asset_id: string;
+  asset_group_id?: string;
+  campaign_id: string;
+  asset_type: string;
+  date: string;
+  impressions: number;
+  clicks: number;
+  cost_micros: number;
+  conversions: number;
+  conversion_value_micros: number;
+  ctr: number;
+  avg_cpc_micros: number;
+  avg_cpm_micros: number;
+  view_through_conversions: number;
+}
+
 export class GoogleAdsPerformanceExtractor {
   private customerId: string;
 
@@ -70,8 +105,8 @@ export class GoogleAdsPerformanceExtractor {
 
       let whereClause = `WHERE segments.date BETWEEN '${formattedStartDate}' AND '${formattedEndDate}'`;
       
-      // Add modified since filter for incremental sync
-      if (modifiedSince) {
+      // Add modified since filter for incremental sync only when no specific dates provided
+      if (modifiedSince && !startDate && !endDate) {
         const modifiedSinceFormatted = modifiedSince.toISOString().split('T')[0];
         whereClause += ` AND segments.date >= '${modifiedSinceFormatted}'`;
       }
@@ -154,7 +189,7 @@ export class GoogleAdsPerformanceExtractor {
 
       let whereClause = `WHERE segments.date BETWEEN '${formattedStartDate}' AND '${formattedEndDate}'`;
       
-      if (modifiedSince) {
+      if (modifiedSince && !startDate && !endDate) {
         const modifiedSinceFormatted = modifiedSince.toISOString().split('T')[0];
         whereClause += ` AND segments.date >= '${modifiedSinceFormatted}'`;
       }
@@ -242,7 +277,7 @@ export class GoogleAdsPerformanceExtractor {
 
       let whereClause = `WHERE segments.date BETWEEN '${formattedStartDate}' AND '${formattedEndDate}' AND campaign.advertising_channel_type = 'PERFORMANCE_MAX'`;
       
-      if (modifiedSince) {
+      if (modifiedSince && !startDate && !endDate) {
         const modifiedSinceFormatted = modifiedSince.toISOString().split('T')[0];
         whereClause += ` AND segments.date >= '${modifiedSinceFormatted}'`;
       }
@@ -297,6 +332,264 @@ export class GoogleAdsPerformanceExtractor {
     }
   }
 
+
+  async extractAdPerformance(
+    startDate?: Date,
+    endDate?: Date,
+    modifiedSince?: Date
+  ): Promise<GoogleAdsAdPerformance[]> {
+    try {
+      logger.info('Starting Google Ads ad performance extraction', {
+        startDate: startDate?.toISOString().split('T')[0],
+        endDate: endDate?.toISOString().split('T')[0]
+      });
+
+      // Use GoogleAdsClient for proper token management
+      const GoogleAdsClient = (await import('./client')).default;
+      const adsClient = new GoogleAdsClient();
+
+      // Default to last 30 days if no dates specified
+      const defaultEndDate = endDate || new Date();
+      const defaultStartDate = startDate || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+      const formattedStartDate = defaultStartDate.toISOString().split('T')[0];
+      const formattedEndDate = defaultEndDate.toISOString().split('T')[0];
+
+      let whereClause = `WHERE segments.date BETWEEN '${formattedStartDate}' AND '${formattedEndDate}'`;
+      
+      // Only add modifiedSince filter if no explicit date range is provided
+      if (modifiedSince && !startDate && !endDate) {
+        const modifiedSinceFormatted = modifiedSince.toISOString().split('T')[0];
+        whereClause += ` AND segments.date >= '${modifiedSinceFormatted}'`;
+      }
+
+      const gaql = `
+        SELECT 
+          ad_group_ad.ad.id,
+          ad_group.id,
+          campaign.id,
+          segments.date,
+          metrics.impressions,
+          metrics.clicks,
+          metrics.cost_micros,
+          metrics.conversions,
+          metrics.conversions_value,
+          metrics.ctr,
+          metrics.average_cpc,
+          metrics.average_cpm,
+          metrics.view_through_conversions,
+          metrics.video_views,
+          metrics.video_view_rate
+        FROM ad_group_ad 
+        ${whereClause}
+        AND ad_group_ad.status != 'REMOVED'
+        ORDER BY segments.date DESC
+      `;
+
+      logger.debug('Executing Google Ads ad performance query', {
+        query: gaql.substring(0, 200) + '...',
+        dateRange: `${formattedStartDate} to ${formattedEndDate}`
+      });
+
+      const rows = await adsClient.executeQuery(gaql);
+      
+      logger.debug(`Google Ads API returned ${rows.length} ad performance records`);
+
+      const performanceData: GoogleAdsAdPerformance[] = [];
+      const uniqueKeys = new Set<string>();
+
+      for (const row of rows) {
+        const adId = row.adGroupAd?.ad?.id?.toString() || '';
+        const adGroupId = row.adGroup?.id?.toString() || '';
+        const campaignId = row.campaign?.id?.toString() || '';
+        const date = row.segments?.date || '';
+        
+        // Create unique key for deduplication
+        const uniqueKey = `${adId}:${date}`;
+        
+        // Skip records with missing required fields
+        if (!adId || !adGroupId || !campaignId || !date) {
+          logger.warn('Skipping Google ad performance record with missing required fields', {
+            ad_id: adId,
+            ad_group_id: adGroupId,
+            campaign_id: campaignId,
+            date
+          });
+          continue;
+        }
+        
+        // Skip duplicates
+        if (uniqueKeys.has(uniqueKey)) {
+          continue;
+        }
+        
+        uniqueKeys.add(uniqueKey);
+
+        const data: GoogleAdsAdPerformance = {
+          ad_id: adId,
+          ad_group_id: adGroupId,
+          campaign_id: campaignId,
+          date,
+          impressions: parseInt(row.metrics?.impressions?.toString() || '0'),
+          clicks: parseInt(row.metrics?.clicks?.toString() || '0'),
+          cost_micros: parseInt(row.metrics?.cost_micros?.toString() || '0'),
+          conversions: parseFloat(row.metrics?.conversions?.toString() || '0'),
+          conversion_value_micros: parseInt(row.metrics?.conversions_value?.toString() || '0'),
+          ctr: parseFloat(row.metrics?.ctr?.toString() || '0'),
+          avg_cpc_micros: parseInt(row.metrics?.average_cpc?.toString() || '0'),
+          avg_cpm_micros: parseInt(row.metrics?.average_cpm?.toString() || '0'),
+          view_through_conversions: parseFloat(row.metrics?.view_through_conversions?.toString() || '0'),
+          video_views: parseInt(row.metrics?.video_views?.toString() || '0'),
+          video_view_rate: parseFloat(row.metrics?.video_view_rate?.toString() || '0')
+        };
+
+        performanceData.push(data);
+      }
+
+      logger.info(`Extracted ${performanceData.length} Google ad performance records`, {
+        dateRange: `${formattedStartDate} to ${formattedEndDate}`,
+        recordCount: performanceData.length
+      });
+
+      return performanceData;
+
+    } catch (error) {
+      logger.error('Failed to extract Google ad performance', {
+        error: getErrorMessage(error)
+      });
+      throw error;
+    }
+  }
+
+  async extractAssetPerformance(
+    startDate?: Date,
+    endDate?: Date,
+    modifiedSince?: Date
+  ): Promise<GoogleAdsAssetPerformance[]> {
+    try {
+      logger.info('Starting Google Ads asset performance extraction', {
+        startDate: startDate?.toISOString().split('T')[0],
+        endDate: endDate?.toISOString().split('T')[0]
+      });
+
+      // Use GoogleAdsClient for proper token management
+      const GoogleAdsClient = (await import('./client')).default;
+      const adsClient = new GoogleAdsClient();
+
+      // Default to last 30 days if no dates specified
+      const defaultEndDate = endDate || new Date();
+      const defaultStartDate = startDate || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+      const formattedStartDate = defaultStartDate.toISOString().split('T')[0];
+      const formattedEndDate = defaultEndDate.toISOString().split('T')[0];
+
+      let whereClause = `WHERE segments.date BETWEEN '${formattedStartDate}' AND '${formattedEndDate}'`;
+      
+      // Only add modifiedSince filter if no explicit date range is provided
+      if (modifiedSince && !startDate && !endDate) {
+        const modifiedSinceFormatted = modifiedSince.toISOString().split('T')[0];
+        whereClause += ` AND segments.date >= '${modifiedSinceFormatted}'`;
+      }
+
+      // Query for Performance Max asset performance
+      // Note: Some metrics like average_cpm are not compatible with ASSET_GROUP_ASSET resource
+      const gaql = `
+        SELECT 
+          asset_group_asset.asset,
+          asset_group.id,
+          campaign.id,
+          asset.type,
+          segments.date,
+          metrics.impressions,
+          metrics.clicks,
+          metrics.cost_micros,
+          metrics.conversions,
+          metrics.conversions_value,
+          metrics.ctr,
+          metrics.average_cpc,
+          metrics.view_through_conversions
+        FROM asset_group_asset 
+        ${whereClause}
+        AND asset_group_asset.status != 'REMOVED'
+        AND campaign.advertising_channel_type = 'PERFORMANCE_MAX'
+        ORDER BY segments.date DESC
+      `;
+
+      logger.debug('Executing Google Ads asset performance query', {
+        query: gaql.substring(0, 200) + '...',
+        dateRange: `${formattedStartDate} to ${formattedEndDate}`
+      });
+
+      const rows = await adsClient.executeQuery(gaql);
+      
+      logger.debug(`Google Ads API returned ${rows.length} asset performance records`);
+
+      const performanceData: GoogleAdsAssetPerformance[] = [];
+      const uniqueKeys = new Set<string>();
+
+      for (const row of rows) {
+        const assetId = row.assetGroupAsset?.asset?.split('/').pop() || '';
+        const assetGroupId = row.assetGroup?.id?.toString() || '';
+        const campaignId = row.campaign?.id?.toString() || '';
+        const assetType = row.asset?.type || '';
+        const date = row.segments?.date || '';
+        
+        // Create unique key for deduplication
+        const uniqueKey = `${assetId}:${date}`;
+        
+        // Skip records with missing required fields
+        if (!assetId || !campaignId || !date) {
+          logger.warn('Skipping Google asset performance record with missing required fields', {
+            asset_id: assetId,
+            asset_group_id: assetGroupId,
+            campaign_id: campaignId,
+            asset_type: assetType,
+            date
+          });
+          continue;
+        }
+        
+        // Skip duplicates
+        if (uniqueKeys.has(uniqueKey)) {
+          continue;
+        }
+        
+        uniqueKeys.add(uniqueKey);
+
+        const data: GoogleAdsAssetPerformance = {
+          asset_id: assetId,
+          asset_group_id: assetGroupId,
+          campaign_id: campaignId,
+          asset_type: assetType.toLowerCase(),
+          date,
+          impressions: parseInt(row.metrics?.impressions?.toString() || '0'),
+          clicks: parseInt(row.metrics?.clicks?.toString() || '0'),
+          cost_micros: parseInt(row.metrics?.cost_micros?.toString() || '0'),
+          conversions: parseFloat(row.metrics?.conversions?.toString() || '0'),
+          conversion_value_micros: parseInt(row.metrics?.conversions_value?.toString() || '0'),
+          ctr: parseFloat(row.metrics?.ctr?.toString() || '0'),
+          avg_cpc_micros: parseInt(row.metrics?.average_cpc?.toString() || '0'),
+          avg_cpm_micros: 0, // Not available for ASSET_GROUP_ASSET resource
+          view_through_conversions: parseFloat(row.metrics?.view_through_conversions?.toString() || '0')
+        };
+
+        performanceData.push(data);
+      }
+
+      logger.info(`Extracted ${performanceData.length} Google asset performance records`, {
+        dateRange: `${formattedStartDate} to ${formattedEndDate}`,
+        recordCount: performanceData.length
+      });
+
+      return performanceData;
+
+    } catch (error) {
+      logger.error('Failed to extract Google asset performance', {
+        error: getErrorMessage(error)
+      });
+      throw error;
+    }
+  }
 
   async testConnection(): Promise<boolean> {
     try {

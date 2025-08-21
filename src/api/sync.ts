@@ -28,6 +28,19 @@ router.post('/sync', asyncHandler(async (req: Request, res: Response) => {
     });
   }
 
+  const validEntityTypes = [
+    'campaigns', 'ad_groups', 'adsets', 'ads', 'creatives', 'keywords',
+    'performance', 'insights', 'ad_performance', 'creative_performance', 'asset_performance'
+  ];
+  
+  const invalidEntities = entities.filter(entity => !validEntityTypes.includes(entity));
+  if (invalidEntities.length > 0) {
+    return res.status(400).json({
+      success: false,
+      error: `Invalid entity types: ${invalidEntities.join(', ')}. Valid types: ${validEntityTypes.join(', ')}`
+    });
+  }
+
   const validPlatforms = ['google', 'meta', 'all'];
   if (!validPlatforms.includes(platform)) {
     return res.status(400).json({
@@ -102,6 +115,37 @@ router.post('/sync', asyncHandler(async (req: Request, res: Response) => {
             case 'performance':
             case 'insights':
               syncResult = await syncManager.syncPerformance(plt as 'google' | 'meta', mode, options);
+              break;
+            
+            case 'ad_performance':
+              syncResult = await syncManager.performIncrementalSync(plt as 'google' | 'meta', 'ad_performance', {
+                ...options,
+                forceFullSync: mode === 'full'
+              });
+              break;
+            
+            case 'creative_performance':
+              if (plt === 'meta') {
+                syncResult = await syncManager.performIncrementalSync(plt, 'creative_performance', {
+                  ...options,
+                  forceFullSync: mode === 'full'
+                });
+              } else {
+                logger.warn(`Creative performance not supported for platform: ${plt}`);
+                continue;
+              }
+              break;
+            
+            case 'asset_performance':
+              if (plt === 'google') {
+                syncResult = await syncManager.performIncrementalSync(plt, 'asset_performance', {
+                  ...options,
+                  forceFullSync: mode === 'full'
+                });
+              } else {
+                logger.warn(`Asset performance not supported for platform: ${plt}`);
+                continue;
+              }
               break;
             
             default:
@@ -397,6 +441,61 @@ router.get('/status', asyncHandler(async (req: Request, res: Response) => {
       status: 'degraded',
       timestamp: new Date().toISOString(),
       error: error.message
+    });
+  }
+}));
+
+// Emergency reload endpoint for specific date ranges
+router.post('/emergency-reload', asyncHandler(async (req: Request, res: Response) => {
+  const { startDate, endDate, platform = 'google' } = req.body;
+
+  if (!startDate || !endDate) {
+    return res.status(400).json({
+      success: false,
+      error: 'startDate and endDate are required (YYYY-MM-DD format)'
+    });
+  }
+
+  // Validate date format
+  const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+  if (!dateRegex.test(startDate) || !dateRegex.test(endDate)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Dates must be in YYYY-MM-DD format'
+    });
+  }
+
+  try {
+    logger.info('Emergency reload requested', {
+      startDate,
+      endDate,
+      platform,
+      requestId: req.headers['x-request-id']
+    });
+
+    const EmergencyReload = (await import('@/utils/emergency-reload')).default;
+    const reloader = new EmergencyReload();
+    
+    const result = await reloader.reloadDateRange(startDate, endDate, platform);
+
+    res.json({
+      success: true,
+      message: `Emergency reload completed for ${platform}`,
+      ...result
+    });
+
+  } catch (error) {
+    logger.error('Emergency reload failed', {
+      error: error.message,
+      startDate,
+      endDate,
+      platform
+    });
+
+    res.status(500).json({
+      success: false,
+      error: 'Emergency reload failed',
+      message: error.message
     });
   }
 }));

@@ -3,11 +3,39 @@ import { appConfig } from '@/utils/config';
 import logger from '@/utils/logger';
 import { TokenData } from '@/utils/types';
 import { getErrorMessage } from '@/utils/error-handler';
+import GoogleServiceAccountAuth from './google-service-account';
 
 export class TokenManager {
   private supabase = createClient(appConfig.supabaseUrl, appConfig.supabaseServiceKey);
+  private serviceAccountAuth?: GoogleServiceAccountAuth;
+
+  constructor() {
+    // Initialize service account if configured
+    try {
+      this.serviceAccountAuth = new GoogleServiceAccountAuth();
+      if (!this.serviceAccountAuth.isConfigured()) {
+        this.serviceAccountAuth = undefined;
+      }
+    } catch {
+      this.serviceAccountAuth = undefined;
+    }
+  }
 
   async getValidGoogleToken(): Promise<string> {
+    // Try service account first if configured
+    if (this.serviceAccountAuth) {
+      try {
+        logger.info('Using Google Service Account authentication');
+        return await this.serviceAccountAuth.getAccessToken();
+      } catch (error) {
+        logger.error('Service account authentication failed, falling back to OAuth2', { 
+          error: getErrorMessage(error) 
+        });
+      }
+    }
+
+    // Fallback to OAuth2
+    logger.info('Using OAuth2 authentication');
     try {
       // Get current token from database
       const { data: tokenData, error } = await this.supabase
@@ -41,29 +69,87 @@ export class TokenManager {
   }
 
   async refreshGoogleToken(refreshToken: string): Promise<string> {
-    try {
-      const response = await fetch('https://oauth2.googleapis.com/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          client_id: appConfig.googleClientId,
-          client_secret: appConfig.googleClientSecret,
-          refresh_token: refreshToken,
-          grant_type: 'refresh_token'
-        })
-      });
-
-      const tokenResponse = await response.json() as any;
-
-      if (!response.ok) {
-        logger.error('Google token refresh failed', { 
-          error: tokenResponse?.error_description || 'Unknown error',
-          status: response.status 
+    const MAX_RETRY_ATTEMPTS = 3;
+    
+    for (let attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt++) {
+      try {
+        logger.info(`Attempting Google token refresh (attempt ${attempt}/${MAX_RETRY_ATTEMPTS})`);
+        
+        const response = await fetch('https://oauth2.googleapis.com/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            client_id: appConfig.googleClientId,
+            client_secret: appConfig.googleClientSecret,
+            refresh_token: refreshToken,
+            grant_type: 'refresh_token'
+          })
         });
-        throw new Error(`Google token refresh failed: ${tokenResponse?.error_description || 'Unknown error'}`);
-      }
 
-      // Update token in database
+        const tokenResponse = await response.json() as any;
+
+        if (!response.ok) {
+          if (tokenResponse?.error === 'invalid_grant') {
+            // Critical: Refresh token expired - no retry needed
+            logger.error('Google refresh token expired - manual re-authentication required', {
+              error: tokenResponse.error_description,
+              status: response.status
+            });
+            await this.handleInvalidGrant('google');
+            throw new Error('REFRESH_TOKEN_EXPIRED: Manual re-authentication required');
+          }
+          
+          if (attempt === MAX_RETRY_ATTEMPTS) {
+            logger.error('Google token refresh failed after all attempts', { 
+              error: tokenResponse?.error_description || 'Unknown error',
+              status: response.status,
+              attempts: MAX_RETRY_ATTEMPTS
+            });
+            throw new Error(`Google token refresh failed: ${tokenResponse?.error_description || 'Unknown error'}`);
+          }
+          
+          // Temporary error - wait and retry
+          const waitTime = 2000 * attempt;
+          logger.warn(`Google token refresh failed (attempt ${attempt}), retrying in ${waitTime}ms`, {
+            error: tokenResponse?.error,
+            status: response.status
+          });
+          await this.delay(waitTime);
+          continue;
+        }
+
+        // Success - update database and return
+        logger.info(`Google token refresh successful (attempt ${attempt})`);
+        return await this.updateGoogleTokenInDatabase(tokenResponse);
+        
+      } catch (error) {
+        if (error.message?.includes('REFRESH_TOKEN_EXPIRED')) {
+          // Don't retry for expired refresh tokens
+          throw error;
+        }
+        
+        if (attempt === MAX_RETRY_ATTEMPTS) {
+          logger.error('Google token refresh error after all attempts', { 
+            error: getErrorMessage(error),
+            attempts: MAX_RETRY_ATTEMPTS
+          });
+          throw error;
+        }
+        
+        // Network or other temporary error - retry
+        const waitTime = 2000 * attempt;
+        logger.warn(`Network error during token refresh (attempt ${attempt}), retrying in ${waitTime}ms`, {
+          error: getErrorMessage(error)
+        });
+        await this.delay(waitTime);
+      }
+    }
+    
+    throw new Error('Google token refresh failed after all attempts');
+  }
+
+  private async updateGoogleTokenInDatabase(tokenResponse: any): Promise<string> {
+    try {
       const expiresAt = new Date(Date.now() + ((tokenResponse?.expires_in || 3600) * 1000));
       
       const { error: updateError } = await this.supabase
@@ -72,7 +158,9 @@ export class TokenManager {
         .update({
           access_token: tokenResponse?.access_token,
           expires_at: expiresAt.toISOString(),
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
+          last_refresh_attempt: new Date().toISOString(),
+          refresh_error: null // Clear any previous errors
         })
         .eq('platform', 'google');
 
@@ -81,15 +169,67 @@ export class TokenManager {
         throw new Error('Failed to update token in database');
       }
 
-      logger.info('Google token refreshed successfully', {
-        expiresAt: expiresAt.toISOString()
+      logger.info('Google token refreshed and stored successfully', {
+        expiresAt: expiresAt.toISOString(),
+        expiresInMinutes: Math.floor((expiresAt.getTime() - Date.now()) / (1000 * 60))
       });
 
       return tokenResponse?.access_token || '';
-
     } catch (error) {
-      logger.error('Google token refresh error', { error: getErrorMessage(error) });
-      throw error;
+      logger.error('Failed to update Google token in database', { error: getErrorMessage(error) });
+      throw new Error('Failed to store refreshed token in database');
+    }
+  }
+
+  private async handleInvalidGrant(platform: string): Promise<void> {
+    try {
+      logger.error(`🚨 CRITICAL: ${platform} refresh token expired`, {
+        platform,
+        action: 'marking_token_invalid',
+        requires_manual_intervention: true
+      });
+
+      // Mark token as invalid in database
+      await this.supabase
+        .schema('marketing')
+        .from('platform_tokens')
+        .update({
+          refresh_error: 'invalid_grant - refresh token expired',
+          last_refresh_attempt: new Date().toISOString(),
+          token_status: 'invalid'
+        })
+        .eq('platform', platform);
+
+      // Create alert for manual intervention
+      await this.createCriticalTokenAlert(platform);
+      
+    } catch (error) {
+      logger.error('Failed to handle invalid grant error', {
+        platform,
+        error: getErrorMessage(error)
+      });
+    }
+  }
+
+  private async createCriticalTokenAlert(platform: string): Promise<void> {
+    try {
+      // For now, log the critical alert - in production this could send to Slack/email
+      logger.error('🚨 CRITICAL TOKEN ALERT 🚨', {
+        platform,
+        message: `${platform.toUpperCase()} refresh token has expired`,
+        action_required: 'Manual re-authentication needed immediately',
+        impact: 'All sync operations will fail until resolved',
+        timestamp: new Date().toISOString()
+      });
+
+      // TODO: Add Slack/email notification here
+      // await this.sendSlackAlert(platform);
+      
+    } catch (error) {
+      logger.error('Failed to create critical token alert', {
+        platform,
+        error: getErrorMessage(error)
+      });
     }
   }
 
@@ -260,6 +400,30 @@ export class TokenManager {
       logger.error('Token deletion error', { error: getErrorMessage(error) });
       throw error;
     }
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  async testServiceAccountConnection(): Promise<boolean> {
+    if (!this.serviceAccountAuth) {
+      logger.warn('Service account not configured');
+      return false;
+    }
+
+    try {
+      const result = await this.serviceAccountAuth.testConnection();
+      logger.info('Service account connection test result', { success: result });
+      return result;
+    } catch (error) {
+      logger.error('Service account connection test failed', { error: getErrorMessage(error) });
+      return false;
+    }
+  }
+
+  hasServiceAccount(): boolean {
+    return !!this.serviceAccountAuth;
   }
 }
 

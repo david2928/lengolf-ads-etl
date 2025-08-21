@@ -192,7 +192,13 @@ export class IncrementalSyncManager {
         return this.syncGoogleKeywords(syncParams, batchId);
       
       case 'performance':
-        return this.syncGooglePerformance(syncParams, batchId);
+        return this.syncGooglePerformance(syncParams, batchId, options);
+      
+      case 'ad_performance':
+        return this.syncGoogleAdPerformance(syncParams, batchId, options);
+      
+      case 'asset_performance':
+        return this.syncGoogleAssetPerformance(syncParams, batchId, options);
       
       default:
         throw new Error(`Unknown Google entity type: ${entityType}`);
@@ -220,6 +226,12 @@ export class IncrementalSyncManager {
       
       case 'insights':
         return this.syncMetaInsights(syncParams, batchId, options);
+      
+      case 'ad_performance':
+        return this.syncMetaAdPerformance(syncParams, batchId, options);
+      
+      case 'creative_performance':
+        return this.syncMetaCreativePerformance(syncParams, batchId, options);
       
       default:
         throw new Error(`Unknown Meta entity type: ${entityType}`);
@@ -344,29 +356,36 @@ export class IncrementalSyncManager {
     }
   }
 
-  private async syncGooglePerformance(syncParams: SyncParams, batchId: string): Promise<any> {
+  private async syncGooglePerformance(syncParams: SyncParams, batchId: string, options: any = {}): Promise<any> {
     try {
+      const startDate = options.startDate ? new Date(options.startDate) : undefined;
+      const endDate = options.endDate ? new Date(options.endDate) : undefined;
+      
       logger.info('Syncing Google Ads performance data', { 
         modifiedSince: syncParams.modifiedSince.toISOString(),
+        startDate: startDate?.toISOString(),
+        endDate: endDate?.toISOString(),
+        options,
         batchId 
       });
 
       // Extract all performance data types in parallel
       const [keywordPerformance, campaignPerformance, pmaxPerformance] = await Promise.all([
         this.googlePerformanceExtractor.extractKeywordPerformance(
-          undefined, // startDate
-          undefined, // endDate  
-          syncParams.modifiedSince
+          startDate,
+          endDate,
+          // For specific date ranges, don't use modifiedSince filter  
+          startDate && endDate ? undefined : syncParams.modifiedSince
         ),
         this.googlePerformanceExtractor.extractCampaignPerformance(
-          undefined,
-          undefined,
-          syncParams.modifiedSince
+          startDate,
+          endDate,
+          startDate && endDate ? undefined : syncParams.modifiedSince
         ),
         this.googlePerformanceExtractor.extractPMaxPerformance(
-          undefined,
-          undefined,
-          syncParams.modifiedSince
+          startDate,
+          endDate,
+          startDate && endDate ? undefined : syncParams.modifiedSince
         )
       ]);
 
@@ -491,6 +510,138 @@ export class IncrementalSyncManager {
     }
   }
 
+  private async syncGoogleAdPerformance(syncParams: SyncParams, batchId: string, options: any = {}): Promise<any> {
+    try {
+      const startDate = options.startDate ? new Date(options.startDate) : undefined;
+      const endDate = options.endDate ? new Date(options.endDate) : undefined;
+      
+      logger.info('Syncing Google Ads ad performance data', { 
+        modifiedSince: syncParams.modifiedSince.toISOString(),
+        startDate: startDate?.toISOString(),
+        endDate: endDate?.toISOString(),
+        batchId 
+      });
+
+      const adPerformance = await this.googlePerformanceExtractor.extractAdPerformance(
+        startDate,
+        endDate,
+        startDate && endDate ? undefined : syncParams.modifiedSince
+      );
+
+      const result = await this.batchProcessor.processGoogleAdPerformance(adPerformance, batchId);
+
+      logger.info('Google ad performance sync completed', {
+        adPerformanceRecords: adPerformance.length,
+        result
+      });
+
+      return result;
+
+    } catch (error) {
+      logger.error('Google ad performance sync failed', { error: error.message });
+      throw error;
+    }
+  }
+
+  private async syncGoogleAssetPerformance(syncParams: SyncParams, batchId: string, options: any = {}): Promise<any> {
+    try {
+      const startDate = options.startDate ? new Date(options.startDate) : undefined;
+      const endDate = options.endDate ? new Date(options.endDate) : undefined;
+      
+      logger.info('Syncing Google Ads asset performance data', { 
+        modifiedSince: syncParams.modifiedSince.toISOString(),
+        startDate: startDate?.toISOString(),
+        endDate: endDate?.toISOString(),
+        batchId 
+      });
+
+      const assetPerformance = await this.googlePerformanceExtractor.extractAssetPerformance(
+        startDate,
+        endDate,
+        startDate && endDate ? undefined : syncParams.modifiedSince
+      );
+
+      const result = await this.batchProcessor.processGoogleAssetPerformance(assetPerformance, batchId);
+
+      logger.info('Google asset performance sync completed', {
+        assetPerformanceRecords: assetPerformance.length,
+        result
+      });
+
+      return result;
+
+    } catch (error) {
+      logger.error('Google asset performance sync failed', { error: error.message });
+      throw error;
+    }
+  }
+
+  private async syncMetaAdPerformance(syncParams: SyncParams, batchId: string, options: any = {}): Promise<any> {
+    try {
+      const startDate = options.startDate ? new Date(options.startDate) : undefined;
+      const endDate = options.endDate ? new Date(options.endDate) : undefined;
+      
+      logger.info('Syncing Meta ad performance data', { 
+        modifiedSince: syncParams.modifiedSince.toISOString(),
+        startDate: startDate?.toISOString(),
+        endDate: endDate?.toISOString(),
+        batchId 
+      });
+
+      const adPerformance = await this.metaInsightsExtractor.extractAdPerformance(
+        startDate,
+        endDate,
+        startDate ? undefined : syncParams.modifiedSince
+      );
+
+      const result = await this.batchProcessor.processMetaAdPerformance(adPerformance, batchId);
+
+      logger.info('Meta ad performance sync completed', {
+        adPerformanceRecords: adPerformance.length,
+        result
+      });
+
+      return result;
+
+    } catch (error) {
+      logger.error('Meta ad performance sync failed', { error: error.message });
+      throw error;
+    }
+  }
+
+  private async syncMetaCreativePerformance(syncParams: SyncParams, batchId: string, options: any = {}): Promise<any> {
+    try {
+      const startDate = options.startDate ? new Date(options.startDate) : undefined;
+      const endDate = options.endDate ? new Date(options.endDate) : undefined;
+      
+      logger.info('Syncing Meta creative performance data', { 
+        modifiedSince: syncParams.modifiedSince.toISOString(),
+        startDate: startDate?.toISOString(),
+        endDate: endDate?.toISOString(),
+        batchId 
+      });
+
+      const creativePerformance = await this.metaInsightsExtractor.extractCreativePerformance(
+        startDate,
+        endDate,
+        startDate ? undefined : syncParams.modifiedSince
+      );
+
+      const result = await this.batchProcessor.processMetaCreativePerformance(creativePerformance, batchId);
+
+      logger.info('Meta creative performance sync completed', {
+        creativePerformanceRecords: creativePerformance.length,
+        result
+      });
+
+      return result;
+
+    } catch (error) {
+      logger.error('Meta creative performance sync failed', { error: error.message });
+      throw error;
+    }
+  }
+
   private async syncMetaInsights(syncParams: SyncParams, batchId: string, options: any = {}): Promise<any> {
     try {
       logger.info('Syncing Meta insights data', { 
@@ -509,21 +660,25 @@ export class IncrementalSyncManager {
         startDate ? undefined : syncParams.modifiedSince  // Only use modifiedSince if no explicit startDate
       );
 
-      // Process both campaign and adset performance data in parallel
-      const [campaignResult, adsetResult] = await Promise.all([
+      // Process all performance data types in parallel
+      const [campaignResult, adsetResult, adResult, creativeResult] = await Promise.all([
         this.batchProcessor.processMetaCampaignPerformance(performanceData.campaigns, batchId),
-        this.batchProcessor.processMetaAdsetPerformance(performanceData.adsets, batchId)
+        this.batchProcessor.processMetaAdsetPerformance(performanceData.adsets, batchId),
+        this.batchProcessor.processMetaAdPerformance(performanceData.ads, batchId),
+        this.batchProcessor.processMetaCreativePerformance(performanceData.creatives, batchId)
       ]);
 
       const totalResult = {
-        inserted: campaignResult.inserted + adsetResult.inserted,
-        updated: campaignResult.updated + adsetResult.updated,
-        failed: campaignResult.failed + adsetResult.failed
+        inserted: campaignResult.inserted + adsetResult.inserted + adResult.inserted + creativeResult.inserted,
+        updated: campaignResult.updated + adsetResult.updated + adResult.updated + creativeResult.updated,
+        failed: campaignResult.failed + adsetResult.failed + adResult.failed + creativeResult.failed
       };
 
       logger.info('Meta insights sync completed', {
         campaignRecords: performanceData.campaigns.length,
         adsetRecords: performanceData.adsets.length,
+        adRecords: performanceData.ads.length,
+        creativeRecords: performanceData.creatives.length,
         result: totalResult
       });
 

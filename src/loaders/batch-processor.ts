@@ -2,7 +2,7 @@ import SupabaseLoader from './supabase-client';
 import logger from '@/utils/logger';
 import { BatchResult, AdWithCreatives, CreativeAsset, MetaCampaign, MetaAdSet, MetaAd } from '@/utils/types';
 import { GoogleAdsKeywordPerformance, GoogleAdsCampaignPerformance, GoogleAdsPMaxPerformance } from '@/extractors/google/performance';
-import { MetaCampaignPerformance, MetaAdsetPerformance } from '@/extractors/meta/insights';
+import { MetaCampaignPerformance, MetaAdsetPerformance, MetaAdPerformance, MetaCreativePerformance } from '@/extractors/meta/insights';
 
 export class BatchProcessor {
   private supabase: SupabaseLoader;
@@ -708,6 +708,31 @@ export class BatchProcessor {
     );
   }
 
+  // New Google Ads Performance Processing Methods
+  async processGoogleAdPerformance(
+    performanceData: any[],
+    batchId?: string
+  ): Promise<BatchResult> {
+    return this.processPerformanceData(
+      'google_ads_ad_performance',
+      performanceData,
+      ['ad_id', 'date'],
+      batchId
+    );
+  }
+
+  async processGoogleAssetPerformance(
+    performanceData: any[],
+    batchId?: string
+  ): Promise<BatchResult> {
+    return this.processPerformanceData(
+      'google_ads_asset_performance',
+      performanceData,
+      ['asset_id', 'date'],
+      batchId
+    );
+  }
+
   // Meta Ads Performance Processing Methods
   async processMetaCampaignPerformance(
     performanceData: MetaCampaignPerformance[],
@@ -729,6 +754,30 @@ export class BatchProcessor {
       'meta_ads_adset_performance',
       performanceData,
       ['adset_id', 'date'],
+      batchId
+    );
+  }
+
+  async processMetaAdPerformance(
+    performanceData: MetaAdPerformance[],
+    batchId?: string
+  ): Promise<BatchResult> {
+    return this.processPerformanceData(
+      'meta_ads_ad_performance',
+      performanceData,
+      ['ad_id', 'date'],
+      batchId
+    );
+  }
+
+  async processMetaCreativePerformance(
+    performanceData: MetaCreativePerformance[],
+    batchId?: string
+  ): Promise<BatchResult> {
+    return this.processPerformanceData(
+      'meta_ads_creative_performance',
+      performanceData,
+      ['creative_id', 'date'],
       batchId
     );
   }

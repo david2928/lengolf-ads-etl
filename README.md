@@ -1,6 +1,6 @@
 # Lengolf Ads ETL Service
 
-A dedicated Google Cloud Run service for extracting Google Ads and Meta Ads data with automated token refresh, incremental loading, and comprehensive creative asset tracking.
+A serverless ETL service for extracting Google Ads and Meta Ads data via GitHub Actions, featuring Google Service Account authentication, automated token management, and comprehensive creative asset tracking.
 
 ## Background & Context
 
@@ -50,7 +50,8 @@ This separation allows the main golf booking application to focus on core busine
 - 📱 **Meta Ads Integration**: Campaign, ad set, ad, and creative extraction with visual assets
 - 🔄 **Incremental Loading**: State-based incremental syncs with configurable lookback
 - 🎨 **Creative Assets**: Image/video extraction with thumbnails and preview URLs
-- 🔐 **Token Management**: Automated OAuth token refresh for both platforms
+- 🔐 **Service Account Auth**: Google Service Account authentication eliminates token expiration issues
+- 🔄 **OAuth Fallback**: Automated OAuth token refresh for backward compatibility
 - 📊 **Monitoring**: Prometheus metrics and comprehensive status tracking
 - ⚡ **Performance**: Batch processing with configurable batch sizes
 - 🏥 **Health Checks**: Kubernetes-ready health, liveness, and readiness probes
@@ -133,7 +134,26 @@ Cloud Run Service
 
 ## Quick Start
 
-### Development Setup
+### 🚀 GitHub Actions Setup (Recommended)
+
+1. **Add Service Account Secret**:
+   - Go to Repository Settings → Secrets → Actions
+   - Add secret: `GOOGLE_SERVICE_ACCOUNT_KEY` with your service account JSON
+
+2. **Push Changes**:
+   ```bash
+   git add .
+   git commit -m "Setup service account authentication" 
+   git push
+   ```
+
+3. **Monitor Workflows**:
+   - Check the Actions tab for automatic deployments
+   - Workflows run every 2 hours for incremental sync
+
+📖 **Complete Setup Guide**: See [docs/setup/service-account-setup.md](./docs/setup/service-account-setup.md)
+
+### 🛠️ Local Development
 
 ```bash
 # Clone repository
@@ -163,20 +183,18 @@ npm run docker:build
 npm run docker:run
 ```
 
-### Google Cloud Deployment
+### GitHub Actions Deployment
+
+Deployment is automated via GitHub Actions. Simply push to your repository:
 
 ```bash
-# Deploy to Cloud Run
-gcloud run deploy lengolf-ads-etl \
-  --source . \
-  --region asia-southeast1 \
-  --platform managed \
-  --memory 2Gi \
-  --cpu 2 \
-  --timeout 900 \
-  --max-instances 10 \
-  --min-instances 1
+git push origin main
 ```
+
+Workflows will automatically:
+- Build and deploy the service
+- Run incremental syncs every 2 hours
+- Refresh tokens every 30 minutes (if using OAuth2)
 
 ## Configuration
 
@@ -191,11 +209,14 @@ NODE_ENV=production
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_KEY=your-service-role-key
 
-# Google Ads
+# Google Ads (OAuth2 - for backward compatibility)
 GOOGLE_CLIENT_ID=your-google-oauth-client-id
 GOOGLE_CLIENT_SECRET=your-google-oauth-client-secret
 GOOGLE_CUSTOMER_ID=123-456-7890
 GOOGLE_DEVELOPER_TOKEN=your-google-ads-developer-token
+
+# Google Service Account (Recommended - eliminates token expiration)
+GOOGLE_SERVICE_ACCOUNT_KEY={"type":"service_account","project_id":"...","private_key":"-----BEGIN PRIVATE KEY-----\n...","client_email":"...@....iam.gserviceaccount.com",...}
 
 # Meta Ads
 META_APP_ID=your-facebook-app-id

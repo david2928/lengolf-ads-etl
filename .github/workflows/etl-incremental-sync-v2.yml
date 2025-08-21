@@ -208,6 +208,15 @@ jobs:
             exit 1
           fi
           
+          # Check if the API returned success=false even with HTTP 200
+          CAMPAIGN_SUCCESS=$(echo "$CAMPAIGN_BODY" | jq -r '.success // false')
+          if [ "$CAMPAIGN_SUCCESS" != "true" ]; then
+            echo "❌ Google campaigns sync failed (API returned success=false)"
+            echo "$CAMPAIGN_BODY" | jq -r '.message // "Unknown error"'
+            echo "Full response: $CAMPAIGN_BODY"
+            exit 1
+          fi
+          
           echo "✅ Google campaigns synced successfully"
           echo "$CAMPAIGN_BODY" | jq -r '(.summary.totalRecordsProcessed // 0) | tostring + " records processed"'
           
@@ -226,6 +235,15 @@ jobs:
           if [ "$ADGROUP_HTTP_CODE" != "200" ]; then
             echo "❌ Google ad groups sync failed with HTTP $ADGROUP_HTTP_CODE"
             echo "$ADGROUP_BODY"
+            exit 1
+          fi
+          
+          # Check if the API returned success=false even with HTTP 200
+          ADGROUP_SUCCESS=$(echo "$ADGROUP_BODY" | jq -r '.success // false')
+          if [ "$ADGROUP_SUCCESS" != "true" ]; then
+            echo "❌ Google ad groups sync failed (API returned success=false)"
+            echo "$ADGROUP_BODY" | jq -r '.message // "Unknown error"'
+            echo "Full response: $ADGROUP_BODY"
             exit 1
           fi
           
@@ -250,6 +268,15 @@ jobs:
             exit 1
           fi
           
+          # Check if the API returned success=false even with HTTP 200
+          ADS_SUCCESS=$(echo "$ADS_BODY" | jq -r '.success // false')
+          if [ "$ADS_SUCCESS" != "true" ]; then
+            echo "❌ Google ads sync failed (API returned success=false)"
+            echo "$ADS_BODY" | jq -r '.message // "Unknown error"'
+            echo "Full response: $ADS_BODY"
+            exit 1
+          fi
+          
           echo "✅ Google ads synced successfully"
           echo "$ADS_BODY" | jq -r '(.summary.totalRecordsProcessed // 0) | tostring + " records processed"'
           
@@ -271,6 +298,15 @@ jobs:
             exit 1
           fi
           
+          # Check if the API returned success=false even with HTTP 200
+          KEYWORDS_SUCCESS=$(echo "$KEYWORDS_BODY" | jq -r '.success // false')
+          if [ "$KEYWORDS_SUCCESS" != "true" ]; then
+            echo "❌ Google keywords sync failed (API returned success=false)"
+            echo "$KEYWORDS_BODY" | jq -r '.message // "Unknown error"'
+            echo "Full response: $KEYWORDS_BODY"
+            exit 1
+          fi
+          
           echo "✅ Google keywords synced successfully"
           echo "$KEYWORDS_BODY" | jq -r '(.summary.totalRecordsProcessed // 0) | tostring + " records processed"'
           
@@ -289,6 +325,15 @@ jobs:
           if [ "$PERFORMANCE_HTTP_CODE" != "200" ]; then
             echo "❌ Google performance sync failed with HTTP $PERFORMANCE_HTTP_CODE"
             echo "$PERFORMANCE_BODY"
+            exit 1
+          fi
+          
+          # Check if the API returned success=false even with HTTP 200
+          PERFORMANCE_SUCCESS=$(echo "$PERFORMANCE_BODY" | jq -r '.success // false')
+          if [ "$PERFORMANCE_SUCCESS" != "true" ]; then
+            echo "❌ Google performance sync failed (API returned success=false)"
+            echo "$PERFORMANCE_BODY" | jq -r '.message // "Unknown error"'
+            echo "Full response: $PERFORMANCE_BODY"
             exit 1
           fi
           

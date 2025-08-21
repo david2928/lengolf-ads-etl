@@ -1,0 +1,120 @@
+name: Token Health & Refresh
+
+on:
+  schedule:
+    # Run every 30 minutes to stay ahead of Google's 1-hour expiration
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+jobs:
+  token-refresh:
+    name: Refresh Tokens Proactively
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+
+      - name: Setup environment variables
+        run: |
+          echo "PORT=8080" >> $GITHUB_ENV
+          echo "NODE_ENV=production" >> $GITHUB_ENV
+          echo "LOG_LEVEL=info" >> $GITHUB_ENV
+          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_KEY=${{ secrets.SUPABASE_SERVICE_KEY }}" >> $GITHUB_ENV
+          echo "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}" >> $GITHUB_ENV
+          echo "GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" >> $GITHUB_ENV
+          echo "GOOGLE_CUSTOMER_ID=${{ secrets.GOOGLE_CUSTOMER_ID }}" >> $GITHUB_ENV
+          echo "GOOGLE_DEVELOPER_TOKEN=${{ secrets.GOOGLE_DEVELOPER_TOKEN }}" >> $GITHUB_ENV
+          echo "META_APP_ID=${{ secrets.META_APP_ID }}" >> $GITHUB_ENV
+          echo "META_APP_SECRET=${{ secrets.META_APP_SECRET }}" >> $GITHUB_ENV
+          echo "META_AD_ACCOUNT_ID=${{ secrets.META_AD_ACCOUNT_ID }}" >> $GITHUB_ENV
+          echo "ETL_API_KEY=${{ secrets.ETL_API_KEY }}" >> $GITHUB_ENV
+
+      - name: Start ETL service
+        run: |
+          echo "🚀 Starting ETL service for token refresh..."
+          npm start &
+          ETL_PID=$!
+          echo "ETL_PID=$ETL_PID" >> $GITHUB_ENV
+          
+          # Wait for service to be ready
+          echo "⏳ Waiting for ETL service to start..."
+          for i in {1..15}; do
+            if curl -f http://localhost:8080/health >/dev/null 2>&1; then
+              echo "✅ ETL service is ready!"
+              break
+            fi
+            echo "Waiting... ($i/15)"
+            sleep 2
+          done
+
+      - name: Check Token Health
+        run: |
+          echo "🔍 Checking token health..."
+          HEALTH_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.ETL_API_KEY }}" \
+            http://localhost:8080/api/token-health/summary)
+          
+          echo "📊 Token Health Summary:"
+          echo "$HEALTH_RESPONSE" | jq '.'
+          
+          # Check if any tokens are critical or expired
+          CRITICAL_COUNT=$(echo "$HEALTH_RESPONSE" | jq -r '.data.critical // 0')
+          if [ "$CRITICAL_COUNT" -gt 0 ]; then
+            echo "⚠️ Found $CRITICAL_COUNT critical token(s)"
+            echo "$HEALTH_RESPONSE" | jq -r '.data.needs_attention[]'
+          fi
+
+      - name: Proactive Token Refresh
+        run: |
+          echo "🔄 Performing proactive token refresh..."
+          REFRESH_RESPONSE=$(curl -s -X POST -H "Authorization: Bearer ${{ secrets.ETL_API_KEY }}" \
+            http://localhost:8080/api/token-health/refresh)
+          
+          echo "🔄 Refresh Results:"
+          echo "$REFRESH_RESPONSE" | jq '.'
+          
+          # Check if refresh was successful
+          SUCCESS=$(echo "$REFRESH_RESPONSE" | jq -r '.success // false')
+          if [ "$SUCCESS" = "true" ]; then
+            REFRESHED_PLATFORMS=$(echo "$REFRESH_RESPONSE" | jq -r '.data.refreshed_platforms | join(", ")')
+            FAILED_PLATFORMS=$(echo "$REFRESH_RESPONSE" | jq -r '.data.failed_platforms | join(", ")')
+            
+            echo "✅ Successfully refreshed: $REFRESHED_PLATFORMS"
+            if [ -n "$FAILED_PLATFORMS" ] && [ "$FAILED_PLATFORMS" != "" ]; then
+              echo "❌ Failed to refresh: $FAILED_PLATFORMS"
+            fi
+          else
+            echo "❌ Token refresh failed"
+            echo "$REFRESH_RESPONSE"
+          fi
+
+      - name: Final Health Check
+        if: always()
+        run: |
+          echo "📋 Final token health status:"
+          FINAL_HEALTH=$(curl -s -H "Authorization: Bearer ${{ secrets.ETL_API_KEY }}" \
+            http://localhost:8080/api/token-health/report 2>/dev/null || echo "Health check unavailable")
+          
+          echo "$FINAL_HEALTH"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "🧹 Cleaning up ETL service..."
+          if [ -n "$ETL_PID" ]; then
+            kill $ETL_PID 2>/dev/null || true
+            echo "ETL service stopped"
+          fi
