@@ -36,7 +36,9 @@
       "Bash(mv:*)",
       "Bash(gcloud run services list:*)",
       "mcp__supabase__get_logs",
-      "Bash(timeout:*)"
+      "Bash(timeout:*)",
+      "Bash(git push:*)",
+      "Bash(git reset:*)"
     ],
     "deny": [],
     "ask": []

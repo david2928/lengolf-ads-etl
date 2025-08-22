@@ -42,6 +42,7 @@ export class IncrementalSyncManager {
     } = {}
   ): Promise<SyncResult> {
     const startTime = Date.now();
+    let batchId = '';
     
     try {
       logger.info('Starting incremental sync', {
@@ -51,7 +52,7 @@ export class IncrementalSyncManager {
       });
 
       // Create sync batch record
-      const batchId = await this.supabase.createSyncBatch(
+      batchId = await this.supabase.createSyncBatch(
         platform,
         options.forceFullSync ? 'full' : 'incremental',
         [entityType]
@@ -73,11 +74,13 @@ export class IncrementalSyncManager {
         result = await this.syncMetaEntity(entityType, syncParams, batchId, options);
       }
 
-      // Update sync state
-      await this.updateSyncState(platform, entityType, {
-        last_sync_time: new Date(),
+      // Update sync batch to completed
+      await this.supabase.updateSyncBatch(batchId, {
+        status: 'completed',
         records_processed: result.inserted + result.updated,
-        status: 'completed'
+        records_inserted: result.inserted,
+        records_updated: result.updated,
+        records_failed: result.failed
       });
 
       const duration = Date.now() - startTime;
@@ -104,8 +107,24 @@ export class IncrementalSyncManager {
         error: error.message
       });
 
+      // Try to update the batch status to failed if batchId exists
+      if (batchId) {
+        try {
+          await this.supabase.updateSyncBatch(batchId, {
+            status: 'failed',
+            records_processed: 0,
+            records_inserted: 0,
+            records_updated: 0,
+            records_failed: 0,
+            error_message: error.message
+          });
+        } catch (updateError) {
+          logger.error('Failed to update batch status to failed', { updateError: updateError.message });
+        }
+      }
+
       return {
-        batchId: '',
+        batchId,
         platform,
         entityType,
         recordsProcessed: 0,
@@ -690,35 +709,6 @@ export class IncrementalSyncManager {
     }
   }
 
-  private async updateSyncState(
-    platform: string,
-    entityType: string,
-    updates: {
-      last_sync_time: Date;
-      records_processed: number;
-      status: string;
-      error_message?: string;
-    }
-  ): Promise<void> {
-    try {
-      // This would typically update a sync state table
-      // For now, we'll log the state update
-      logger.info('Sync state updated', {
-        platform,
-        entityType,
-        lastSyncTime: updates.last_sync_time.toISOString(),
-        recordsProcessed: updates.records_processed,
-        status: updates.status
-      });
-
-    } catch (error) {
-      logger.error('Failed to update sync state', {
-        platform,
-        entityType,
-        error: error.message
-      });
-    }
-  }
 
   async syncCampaigns(
     platform: 'google' | 'meta',
