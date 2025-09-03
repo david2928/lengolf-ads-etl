@@ -179,6 +179,27 @@ jobs:
           
           echo "✅ Meta insights synced successfully"
           echo "$INSIGHTS_BODY" | jq -r '(.summary.totalRecordsProcessed // 0) | tostring + " records processed"'
+          
+          sleep 5
+          
+          # Sync Meta creatives
+          echo "🎨 Syncing Meta creatives..."
+          CREATIVES_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ETL_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"platform\": \"meta\", \"mode\": \"$SYNC_MODE\", \"entities\": [\"creatives\"]}" \
+            http://localhost:8080/api/sync)
+          
+          CREATIVES_HTTP_CODE=${CREATIVES_RESPONSE: -3}
+          CREATIVES_BODY=${CREATIVES_RESPONSE%???}
+          
+          if [ "$CREATIVES_HTTP_CODE" != "200" ]; then
+            echo "❌ Meta creatives sync failed with HTTP $CREATIVES_HTTP_CODE"
+            echo "$CREATIVES_BODY"
+            exit 1
+          fi
+          
+          echo "✅ Meta creatives synced successfully"
+          echo "$CREATIVES_BODY" | jq -r '(.summary.totalRecordsProcessed // 0) | tostring + " records processed"'
 
       - name: Sync Google Ads Data
         if: ${{ github.event.inputs.platform == 'google' || github.event.inputs.platform == 'all' || github.event.schedule }}

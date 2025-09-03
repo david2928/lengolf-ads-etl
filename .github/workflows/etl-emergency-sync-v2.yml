@@ -240,7 +240,7 @@ jobs:
         run: |
           echo "📱 Performing Meta-only full sync..."
           
-          for entity in campaigns adsets ads insights; do
+          for entity in campaigns adsets ads creatives insights; do
             echo "Syncing Meta $entity..."
             
             RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \

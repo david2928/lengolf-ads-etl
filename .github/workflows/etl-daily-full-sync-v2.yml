@@ -154,7 +154,7 @@ jobs:
           # Meta dimensional data
           echo "📱 Syncing Meta dimensional data..."
           
-          for entity in campaigns adsets ads; do
+          for entity in campaigns adsets ads creatives; do
             echo "Syncing Meta $entity..."
             
             RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \

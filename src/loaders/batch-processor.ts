@@ -106,11 +106,27 @@ export class BatchProcessor {
       totalUpdated += adsResult.updated;
     }
 
-    // Process creative assets
+    // Process creative assets with duplicate removal
     if (allCreativeAssets.length > 0) {
+      // Remove duplicates by platform + platform_asset_id to prevent conflict errors
+      const uniqueAssets = allCreativeAssets.filter((asset, index, self) => 
+        index === self.findIndex(a => 
+          a.platform === asset.platform && 
+          a.platform_asset_id === asset.platform_asset_id
+        )
+      );
+
+      if (uniqueAssets.length !== allCreativeAssets.length) {
+        logger.warn('Removed duplicate creative assets', {
+          original: allCreativeAssets.length,
+          unique: uniqueAssets.length,
+          duplicates: allCreativeAssets.length - uniqueAssets.length
+        });
+      }
+
       const assetsResult = await this.supabase.bulkUpsert(
         'ad_creative_assets',
-        allCreativeAssets,
+        uniqueAssets,
         ['platform', 'platform_asset_id']
       );
       totalInserted += assetsResult.inserted;
@@ -616,11 +632,27 @@ export class BatchProcessor {
       totalUpdated += adsResult.updated;
     }
 
-    // Process creative assets
+    // Process creative assets with duplicate removal
     if (allCreativeAssets.length > 0) {
+      // Remove duplicates by platform + platform_asset_id to prevent conflict errors
+      const uniqueAssets = allCreativeAssets.filter((asset, index, self) => 
+        index === self.findIndex(a => 
+          a.platform === asset.platform && 
+          a.platform_asset_id === asset.platform_asset_id
+        )
+      );
+
+      if (uniqueAssets.length !== allCreativeAssets.length) {
+        logger.warn('Removed duplicate creative assets', {
+          original: allCreativeAssets.length,
+          unique: uniqueAssets.length,
+          duplicates: allCreativeAssets.length - uniqueAssets.length
+        });
+      }
+
       const assetsResult = await this.supabase.bulkUpsert(
         'ad_creative_assets',
-        allCreativeAssets,
+        uniqueAssets,
         ['platform', 'platform_asset_id']
       );
       totalInserted += assetsResult.inserted;

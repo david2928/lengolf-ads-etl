@@ -38,7 +38,9 @@
       "mcp__supabase__get_logs",
       "Bash(timeout:*)",
       "Bash(git push:*)",
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "Bash(bash:*)",
+      "Bash(npm start)"
     ],
     "deny": [],
     "ask": []
