@@ -1,0 +1,101 @@
+name: Workflow Health Monitor
+
+# Monitor the health of critical workflows and alert if disabled
+
+on:
+  schedule:
+    # Run daily at 08:00 UTC
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+
+jobs:
+  monitor-workflows:
+    name: Monitor Critical Workflows
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup GitHub CLI
+        run: gh --version
+
+      - name: Check Token Refresh Workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "🔍 Checking Token Health & Refresh workflow..."
+
+          # Check if workflow is enabled
+          WORKFLOW_STATE=$(gh workflow list --all | grep "Token Health & Refresh" | awk '{print $2}')
+
+          if [ "$WORKFLOW_STATE" != "active" ]; then
+            echo "❌ CRITICAL: Token Health & Refresh workflow is $WORKFLOW_STATE"
+            echo "This will cause token expiration and sync failures!"
+            exit 1
+          else
+            echo "✅ Token Health & Refresh workflow is active"
+          fi
+
+      - name: Check Incremental Sync Workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "🔍 Checking ETL Incremental Data Sync workflow..."
+
+          WORKFLOW_STATE=$(gh workflow list --all | grep "ETL Incremental Data Sync" | awk '{print $2}')
+
+          if [ "$WORKFLOW_STATE" != "active" ]; then
+            echo "❌ WARNING: ETL Incremental Data Sync workflow is $WORKFLOW_STATE"
+            exit 1
+          else
+            echo "✅ ETL Incremental Data Sync workflow is active"
+          fi
+
+      - name: Check Daily Sync Workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "🔍 Checking ETL Daily Full Sync workflow..."
+
+          WORKFLOW_STATE=$(gh workflow list --all | grep "ETL Daily Full Sync" | awk '{print $2}')
+
+          if [ "$WORKFLOW_STATE" != "active" ]; then
+            echo "❌ WARNING: ETL Daily Full Sync workflow is $WORKFLOW_STATE"
+            exit 1
+          else
+            echo "✅ ETL Daily Full Sync workflow is active"
+          fi
+
+      - name: Check Recent Token Refresh Runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "📊 Checking recent token refresh activity..."
+
+          LAST_RUN=$(gh run list --workflow="token-refresh.yml" --limit 1 --json createdAt,conclusion --jq '.[0].createdAt')
+
+          if [ -z "$LAST_RUN" ]; then
+            echo "⚠️ No recent token refresh runs found"
+            exit 1
+          fi
+
+          # Check if last run was within 24 hours
+          LAST_RUN_SECONDS=$(date -d "$LAST_RUN" +%s)
+          NOW_SECONDS=$(date +%s)
+          HOURS_SINCE=$((($NOW_SECONDS - $LAST_RUN_SECONDS) / 3600))
+
+          if [ $HOURS_SINCE -gt 24 ]; then
+            echo "❌ CRITICAL: Last token refresh was $HOURS_SINCE hours ago"
+            echo "Token refresh should run every 30 minutes!"
+            exit 1
+          else
+            echo "✅ Last token refresh: $HOURS_SINCE hours ago"
+          fi
+
+      - name: Summary
+        if: success()
+        run: |
+          echo ""
+          echo "✅ All workflow health checks passed!"
+          echo "🎯 All critical workflows are active and running"

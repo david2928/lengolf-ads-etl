@@ -252,10 +252,32 @@ export class TokenManager {
         (expiryTime.getTime() - Date.now()) / (24 * 60 * 60 * 1000)
       );
 
-      // Refresh if token expires in less than 7 days
-      if (daysUntilExpiry < 7) {
-        logger.info(`Meta token expires in ${daysUntilExpiry} days, refreshing...`);
-        return await this.refreshMetaToken(tokenData.access_token);
+      // Check if token is already expired
+      if (daysUntilExpiry < 0) {
+        logger.error('🚨 CRITICAL: Meta token has EXPIRED', {
+          expiredDaysAgo: Math.abs(daysUntilExpiry),
+          expiryDate: expiryTime.toISOString(),
+          action_required: 'Manual re-authentication needed'
+        });
+        throw new Error('Meta token expired. Manual re-authentication required. Cannot auto-refresh expired tokens.');
+      }
+
+      // Refresh if token expires in less than 14 days (increased from 7 for earlier refresh)
+      if (daysUntilExpiry < 14) {
+        logger.info(`Meta token expires in ${daysUntilExpiry} days, refreshing proactively...`);
+        try {
+          return await this.refreshMetaToken(tokenData.access_token);
+        } catch (error) {
+          // If refresh fails but token is still valid, use existing token
+          if (daysUntilExpiry > 0) {
+            logger.warn('Meta token refresh failed, but token still valid', {
+              daysUntilExpiry,
+              error: getErrorMessage(error)
+            });
+            return tokenData.access_token;
+          }
+          throw error;
+        }
       }
 
       logger.debug('Using existing Meta token', { daysUntilExpiry });
@@ -269,6 +291,8 @@ export class TokenManager {
 
   async refreshMetaToken(currentToken: string): Promise<string> {
     try {
+      logger.info('🔄 Starting Meta token refresh...');
+
       const url = new URL('https://graph.facebook.com/oauth/access_token');
       url.searchParams.set('grant_type', 'fb_exchange_token');
       url.searchParams.set('client_id', appConfig.metaAppId);
@@ -279,11 +303,25 @@ export class TokenManager {
       const tokenResponse = await response.json() as any;
 
       if (!response.ok) {
-        logger.error('Meta token refresh failed', {
-          error: tokenResponse?.error?.message || 'Unknown error',
-          status: response.status
+        const errorMsg = tokenResponse?.error?.message || 'Unknown error';
+        const errorCode = tokenResponse?.error?.code;
+
+        logger.error('❌ Meta token refresh failed', {
+          error: errorMsg,
+          errorCode,
+          status: response.status,
+          hint: response.status === 400 ? 'Token may be expired or invalid' : 'Check Meta App credentials'
         });
-        throw new Error(`Meta token refresh failed: ${tokenResponse?.error?.message || 'Unknown error'}`);
+
+        // If token is invalid/expired, this is critical
+        if (errorCode === 190 || response.status === 400) {
+          logger.error('🚨 CRITICAL: Meta token is invalid or expired', {
+            error: errorMsg,
+            action_required: 'Manual re-authentication needed immediately'
+          });
+        }
+
+        throw new Error(`Meta token refresh failed: ${errorMsg}`);
       }
 
       // Update token in database
@@ -304,8 +342,10 @@ export class TokenManager {
         throw new Error('Failed to update token in database');
       }
 
-      logger.info('Meta token refreshed successfully', {
-        expiresAt: expiresAt.toISOString()
+      logger.info('✅ Meta token refreshed successfully', {
+        expiresAt: expiresAt.toISOString(),
+        expiresInDays: Math.floor((expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000)),
+        nextRefreshDue: new Date(Date.now() + 46 * 24 * 60 * 60 * 1000).toISOString() // 46 days (60-14)
       });
 
       return tokenResponse?.access_token || '';

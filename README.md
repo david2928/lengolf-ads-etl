@@ -488,6 +488,34 @@ gcloud secrets add-iam-policy-binding supabase-service-key \
   --role="roles/secretmanager.secretAccessor"
 ```
 
+## Prevention & Monitoring
+
+### 🛡️ Automated Prevention Systems
+
+This service includes comprehensive prevention mechanisms to avoid service disruptions:
+
+1. **Workflow Keep-Alive** - Prevents GitHub from auto-disabling workflows after 60 days of inactivity
+2. **Workflow Health Monitor** - Daily checks to ensure all critical workflows are active
+3. **Enhanced Token Refresh** - Meta tokens refresh 14 days before expiry (2x safety margin)
+4. **Graceful Degradation** - Continues operating with valid tokens even if refresh fails
+
+📖 **Complete Prevention Guide**: See [PREVENTION.md](./PREVENTION.md) for detailed monitoring procedures, alert thresholds, and recovery procedures.
+
+### Quick Health Checks
+
+```bash
+# Check all workflows are enabled
+gh workflow list --all
+
+# Check recent token refresh activity
+gh run list --workflow="token-refresh.yml" --limit 5
+
+# Verify token status in database
+SELECT platform, expires_at,
+       EXTRACT(DAY FROM (expires_at - NOW())) as days_until_expiry
+FROM marketing.platform_tokens;
+```
+
 ## Troubleshooting
 
 ### Common Issues
@@ -496,6 +524,7 @@ gcloud secrets add-iam-policy-binding supabase-service-key \
 - Check token storage in `platform_tokens` table
 - Verify OAuth client credentials
 - Check token expiry dates
+- **See [PREVENTION.md](./PREVENTION.md) for detailed recovery procedures**
 
 **API Rate Limits**
 - Monitor request rates in logs

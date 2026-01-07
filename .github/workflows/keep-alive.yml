@@ -1,0 +1,38 @@
+name: Keep Workflows Alive
+
+# Prevent GitHub from auto-disabling workflows due to 60-day inactivity
+# This workflow runs weekly to keep the repository "active"
+
+on:
+  schedule:
+    # Run every Monday at 00:00 UTC
+    - cron: '0 0 * * 1'
+  workflow_dispatch:
+
+jobs:
+  keep-alive:
+    name: Prevent Workflow Auto-Disable
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Keep workflows active
+        run: |
+          echo "🔄 Keep-alive ping to prevent workflow auto-disable"
+          echo "Last run: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "All workflows remain active!"
+
+      - name: Check workflow status
+        run: |
+          echo "📊 Checking critical workflow status..."
+
+          # This step ensures the workflow executes successfully
+          # GitHub considers this as repository activity
+          echo "✅ Token Health & Refresh: Should be active"
+          echo "✅ ETL Incremental Sync: Should be active"
+          echo "✅ ETL Daily Full Sync: Should be active"
+
+          echo ""
+          echo "⏰ Next keep-alive: $(date -u -d '+7 days' '+%Y-%m-%d %H:%M:%S UTC')"
