@@ -26,8 +26,8 @@ jobs:
         run: |
           echo "🔍 Checking Token Health & Refresh workflow..."
 
-          # Check if workflow is enabled
-          WORKFLOW_STATE=$(gh workflow list --all | grep "Token Health & Refresh" | awk '{print $2}')
+          # Check if workflow is enabled (use tab separator and get last field)
+          WORKFLOW_STATE=$(gh workflow list --all | grep "Token Health & Refresh" | awk -F'\t' '{print $2}')
 
           if [ "$WORKFLOW_STATE" != "active" ]; then
             echo "❌ CRITICAL: Token Health & Refresh workflow is $WORKFLOW_STATE"
@@ -43,7 +43,7 @@ jobs:
         run: |
           echo "🔍 Checking ETL Incremental Data Sync workflow..."
 
-          WORKFLOW_STATE=$(gh workflow list --all | grep "ETL Incremental Data Sync" | awk '{print $2}')
+          WORKFLOW_STATE=$(gh workflow list --all | grep "ETL Incremental Data Sync" | awk -F'\t' '{print $2}')
 
           if [ "$WORKFLOW_STATE" != "active" ]; then
             echo "❌ WARNING: ETL Incremental Data Sync workflow is $WORKFLOW_STATE"
@@ -58,7 +58,7 @@ jobs:
         run: |
           echo "🔍 Checking ETL Daily Full Sync workflow..."
 
-          WORKFLOW_STATE=$(gh workflow list --all | grep "ETL Daily Full Sync" | awk '{print $2}')
+          WORKFLOW_STATE=$(gh workflow list --all | grep "ETL Daily Full Sync" | awk -F'\t' '{print $2}')
 
           if [ "$WORKFLOW_STATE" != "active" ]; then
             echo "❌ WARNING: ETL Daily Full Sync workflow is $WORKFLOW_STATE"
