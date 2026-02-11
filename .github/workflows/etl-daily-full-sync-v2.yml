@@ -307,18 +307,120 @@ jobs:
             -H "Content-Type: application/json" \
             -d "$GOOGLE_PAYLOAD" \
             "http://localhost:8080/api/sync")
-          
+
           GOOGLE_HTTP_CODE=${GOOGLE_RESPONSE: -3}
           GOOGLE_BODY=${GOOGLE_RESPONSE%???}
-          
+
           if [ "$GOOGLE_HTTP_CODE" != "200" ]; then
             echo "❌ Google performance sync failed with HTTP $GOOGLE_HTTP_CODE"
             echo "$GOOGLE_BODY"
             exit 1
           fi
-          
+
           echo "✅ Google performance sync completed"
           echo "$GOOGLE_BODY" | jq '.summary'
+
+          # Google ad-level performance sync
+          echo "🔍 Syncing Google ad performance data..."
+
+          if [ "${{ github.event.inputs.sync_historical }}" = "true" ]; then
+            AD_PERF_PAYLOAD="{\"platform\": \"google\", \"mode\": \"full\", \"entities\": [\"ad_performance\"], \"startDate\": \"$START_DATE\", \"endDate\": \"$END_DATE\"}"
+          else
+            AD_PERF_PAYLOAD='{"platform": "google", "mode": "incremental", "entities": ["ad_performance"]}'
+          fi
+
+          AD_PERF_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$AD_PERF_PAYLOAD" \
+            "http://localhost:8080/api/sync")
+
+          AD_PERF_HTTP_CODE=${AD_PERF_RESPONSE: -3}
+          AD_PERF_BODY=${AD_PERF_RESPONSE%???}
+
+          if [ "$AD_PERF_HTTP_CODE" != "200" ]; then
+            echo "⚠️ Google ad performance sync failed with HTTP $AD_PERF_HTTP_CODE"
+            echo "$AD_PERF_BODY"
+            # Don't fail the whole job for ad performance
+          else
+            echo "✅ Google ad performance sync completed"
+            echo "$AD_PERF_BODY" | jq '.summary'
+          fi
+
+          # Google asset performance sync (Performance Max)
+          echo "🔍 Syncing Google asset performance data..."
+
+          if [ "${{ github.event.inputs.sync_historical }}" = "true" ]; then
+            ASSET_PERF_PAYLOAD="{\"platform\": \"google\", \"mode\": \"full\", \"entities\": [\"asset_performance\"], \"startDate\": \"$START_DATE\", \"endDate\": \"$END_DATE\"}"
+          else
+            ASSET_PERF_PAYLOAD='{"platform": "google", "mode": "incremental", "entities": ["asset_performance"]}'
+          fi
+
+          ASSET_PERF_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$ASSET_PERF_PAYLOAD" \
+            "http://localhost:8080/api/sync")
+
+          ASSET_PERF_HTTP_CODE=${ASSET_PERF_RESPONSE: -3}
+          ASSET_PERF_BODY=${ASSET_PERF_RESPONSE%???}
+
+          if [ "$ASSET_PERF_HTTP_CODE" != "200" ]; then
+            echo "⚠️ Google asset performance sync failed with HTTP $ASSET_PERF_HTTP_CODE"
+            echo "$ASSET_PERF_BODY"
+            # Don't fail the whole job for asset performance
+          else
+            echo "✅ Google asset performance sync completed"
+            echo "$ASSET_PERF_BODY" | jq '.summary'
+          fi
+
+          # Google search terms sync
+          echo "🔍 Syncing Google search term data..."
+
+          if [ "${{ github.event.inputs.sync_historical }}" = "true" ]; then
+            SEARCH_TERMS_PAYLOAD="{\"platform\": \"google\", \"mode\": \"full\", \"entities\": [\"search_terms\"], \"startDate\": \"$START_DATE\", \"endDate\": \"$END_DATE\"}"
+          else
+            SEARCH_TERMS_PAYLOAD='{"platform": "google", "mode": "incremental", "entities": ["search_terms"]}'
+          fi
+
+          SEARCH_TERMS_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$SEARCH_TERMS_PAYLOAD" \
+            "http://localhost:8080/api/sync")
+
+          SEARCH_TERMS_HTTP_CODE=${SEARCH_TERMS_RESPONSE: -3}
+          SEARCH_TERMS_BODY=${SEARCH_TERMS_RESPONSE%???}
+
+          if [ "$SEARCH_TERMS_HTTP_CODE" != "200" ]; then
+            echo "⚠️ Google search terms sync failed with HTTP $SEARCH_TERMS_HTTP_CODE"
+            echo "$SEARCH_TERMS_BODY"
+          else
+            echo "✅ Google search terms sync completed"
+            echo "$SEARCH_TERMS_BODY" | jq '.summary'
+          fi
+
+          # Google geographic performance sync
+          echo "🔍 Syncing Google geographic performance data..."
+
+          if [ "${{ github.event.inputs.sync_historical }}" = "true" ]; then
+            GEO_PAYLOAD="{\"platform\": \"google\", \"mode\": \"full\", \"entities\": [\"geographic\"], \"startDate\": \"$START_DATE\", \"endDate\": \"$END_DATE\"}"
+          else
+            GEO_PAYLOAD='{"platform": "google", "mode": "incremental", "entities": ["geographic"]}'
+          fi
+
+          GEO_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$GEO_PAYLOAD" \
+            "http://localhost:8080/api/sync")
+
+          GEO_HTTP_CODE=${GEO_RESPONSE: -3}
+          GEO_BODY=${GEO_RESPONSE%???}
+
+          if [ "$GEO_HTTP_CODE" != "200" ]; then
+            echo "⚠️ Google geographic sync failed with HTTP $GEO_HTTP_CODE"
+            echo "$GEO_BODY"
+          else
+            echo "✅ Google geographic sync completed"
+            echo "$GEO_BODY" | jq '.summary'
+          fi
 
   data-quality-check:
     name: Data Quality Verification

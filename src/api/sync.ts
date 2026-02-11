@@ -30,7 +30,8 @@ router.post('/sync', asyncHandler(async (req: Request, res: Response) => {
 
   const validEntityTypes = [
     'campaigns', 'ad_groups', 'adsets', 'ads', 'creatives', 'keywords',
-    'performance', 'insights', 'ad_performance', 'creative_performance', 'asset_performance'
+    'performance', 'insights', 'ad_performance', 'creative_performance', 'asset_performance',
+    'search_terms', 'geographic'
   ];
   
   const invalidEntities = entities.filter(entity => !validEntityTypes.includes(entity));
@@ -49,7 +50,7 @@ router.post('/sync', asyncHandler(async (req: Request, res: Response) => {
     });
   }
 
-  const validModes = ['incremental', 'full'];
+  const validModes = ['incremental', 'full', 'historical-backfill'];
   if (!validModes.includes(mode)) {
     return res.status(400).json({
       success: false,
@@ -147,7 +148,31 @@ router.post('/sync', asyncHandler(async (req: Request, res: Response) => {
                 continue;
               }
               break;
-            
+
+            case 'search_terms':
+              if (plt === 'google') {
+                syncResult = await syncManager.performIncrementalSync(plt, 'search_terms', {
+                  ...options,
+                  forceFullSync: mode === 'full'
+                });
+              } else {
+                logger.warn(`Search terms not supported for platform: ${plt}`);
+                continue;
+              }
+              break;
+
+            case 'geographic':
+              if (plt === 'google') {
+                syncResult = await syncManager.performIncrementalSync(plt, 'geographic', {
+                  ...options,
+                  forceFullSync: mode === 'full'
+                });
+              } else {
+                logger.warn(`Geographic performance not supported for platform: ${plt}`);
+                continue;
+              }
+              break;
+
             default:
               logger.error(`Unknown entity type: ${entity}`, { platform: plt, entity });
               continue;

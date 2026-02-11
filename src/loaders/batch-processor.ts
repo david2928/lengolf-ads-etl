@@ -2,6 +2,8 @@ import SupabaseLoader from './supabase-client';
 import logger from '@/utils/logger';
 import { BatchResult, AdWithCreatives, CreativeAsset, MetaCampaign, MetaAdSet, MetaAd } from '@/utils/types';
 import { GoogleAdsKeywordPerformance, GoogleAdsCampaignPerformance, GoogleAdsPMaxPerformance } from '@/extractors/google/performance';
+import { GoogleAdsSearchTermPerformance } from '@/extractors/google/search-terms';
+import { GoogleAdsGeographicPerformance } from '@/extractors/google/geographic';
 import { MetaCampaignPerformance, MetaAdsetPerformance, MetaAdPerformance, MetaCreativePerformance } from '@/extractors/meta/insights';
 
 export class BatchProcessor {
@@ -761,6 +763,30 @@ export class BatchProcessor {
       'google_ads_asset_performance',
       performanceData,
       ['asset_id', 'date'],
+      batchId
+    );
+  }
+
+  async processGoogleSearchTermPerformance(
+    performanceData: GoogleAdsSearchTermPerformance[],
+    batchId?: string
+  ): Promise<BatchResult> {
+    return this.processPerformanceData(
+      'google_ads_search_terms',
+      performanceData,
+      ['search_term', 'campaign_id', 'ad_group_id', 'date'],
+      batchId
+    );
+  }
+
+  async processGoogleGeographicPerformance(
+    performanceData: GoogleAdsGeographicPerformance[],
+    batchId?: string
+  ): Promise<BatchResult> {
+    return this.processPerformanceData(
+      'google_ads_geographic_performance',
+      performanceData,
+      ['campaign_id', 'geo_target_constant', 'date'],
       batchId
     );
   }

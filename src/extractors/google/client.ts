@@ -358,6 +358,38 @@ export class GoogleAdsClient {
     return this.executeQuery(query);
   }
 
+  /**
+   * Upload click conversions to Google Ads for offline conversion tracking.
+   * Uses the ConversionUploadService via the google-ads-api library.
+   */
+  async uploadClickConversions(customerId: string, conversions: any[]): Promise<void> {
+    if (!this.customer) {
+      await this.initializeClient();
+    }
+
+    try {
+      // The google-ads-api library supports uploadClickConversions via customer.conversionUploads
+      // If not directly available, we fall back to the mutate API
+      if (typeof (this.customer as any).uploadClickConversions === 'function') {
+        await (this.customer as any).uploadClickConversions(conversions);
+      } else {
+        // Use REST API directly for conversion upload
+        // This is a placeholder - actual implementation depends on google-ads-api version
+        logger.warn('uploadClickConversions not directly available on Customer object. ' +
+          'Offline conversion upload requires google-ads-api v14+ or direct REST API call. ' +
+          'Conversions prepared but not uploaded.');
+        throw new Error('Offline conversion upload not yet supported by current google-ads-api version. ' +
+          'Please upgrade to v14+ or implement direct REST API call.');
+      }
+    } catch (error) {
+      logger.error('Failed to upload click conversions', {
+        error: getErrorMessage(error),
+        conversionCount: conversions.length
+      });
+      throw error;
+    }
+  }
+
   async testConnection(): Promise<boolean> {
     try {
       const testQuery = `

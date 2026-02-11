@@ -27,6 +27,8 @@ export interface GoogleAdsCampaignPerformance {
   ctr: number;
   avg_cpc_micros: number;
   avg_cpm_micros: number;
+  search_impression_share: number | null;
+  search_lost_is_rank: number | null;
 }
 
 export interface GoogleAdsPMaxPerformance {
@@ -221,6 +223,9 @@ export class GoogleAdsPerformanceExtractor {
       const performanceData: GoogleAdsCampaignPerformance[] = [];
 
       for (const row of results) {
+        const searchImpressionShare = row.metrics?.search_impression_share;
+        const searchLostIsRank = row.metrics?.search_rank_lost_impression_share;
+
         const data: GoogleAdsCampaignPerformance = {
           campaign_id: parseInt(row.campaign?.id?.toString() || '0'),
           date: row.segments?.date || '',
@@ -231,7 +236,9 @@ export class GoogleAdsPerformanceExtractor {
           conversion_value_micros: parseInt(row.metrics?.conversions_value?.toString() || '0'),
           ctr: parseFloat(row.metrics?.ctr?.toString() || '0'),
           avg_cpc_micros: parseInt(row.metrics?.average_cpc?.toString() || '0'),
-          avg_cpm_micros: parseInt(row.metrics?.average_cpm?.toString() || '0')
+          avg_cpm_micros: parseInt(row.metrics?.average_cpm?.toString() || '0'),
+          search_impression_share: searchImpressionShare != null ? parseFloat(searchImpressionShare.toString()) : null,
+          search_lost_is_rank: searchLostIsRank != null ? parseFloat(searchLostIsRank.toString()) : null
         };
 
         performanceData.push(data);

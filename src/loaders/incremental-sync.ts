@@ -2,6 +2,8 @@ import SupabaseLoader from './supabase-client';
 import BatchProcessor from './batch-processor';
 import GoogleAdsExtractor from '@/extractors/google/ads';
 import GoogleAdsPerformanceExtractor from '@/extractors/google/performance';
+import GoogleAdsSearchTermsExtractor from '@/extractors/google/search-terms';
+import GoogleAdsGeographicExtractor from '@/extractors/google/geographic';
 import MetaCampaignsExtractor from '@/extractors/meta/campaigns';
 import MetaAdSetsExtractor from '@/extractors/meta/ad-sets';
 import MetaAdsExtractor from '@/extractors/meta/ads';
@@ -14,6 +16,8 @@ export class IncrementalSyncManager {
   private batchProcessor: BatchProcessor;
   private googleExtractor: GoogleAdsExtractor;
   private googlePerformanceExtractor: GoogleAdsPerformanceExtractor;
+  private googleSearchTermsExtractor: GoogleAdsSearchTermsExtractor;
+  private googleGeographicExtractor: GoogleAdsGeographicExtractor;
   private metaCampaignsExtractor: MetaCampaignsExtractor;
   private metaAdSetsExtractor: MetaAdSetsExtractor;
   private metaAdsExtractor: MetaAdsExtractor;
@@ -24,6 +28,8 @@ export class IncrementalSyncManager {
     this.batchProcessor = new BatchProcessor();
     this.googleExtractor = new GoogleAdsExtractor();
     this.googlePerformanceExtractor = new GoogleAdsPerformanceExtractor();
+    this.googleSearchTermsExtractor = new GoogleAdsSearchTermsExtractor();
+    this.googleGeographicExtractor = new GoogleAdsGeographicExtractor();
     this.metaCampaignsExtractor = new MetaCampaignsExtractor();
     this.metaAdSetsExtractor = new MetaAdSetsExtractor();
     this.metaAdsExtractor = new MetaAdsExtractor();
@@ -37,6 +43,7 @@ export class IncrementalSyncManager {
       lookbackHours?: number;
       lookbackDays?: number;
       forceFullSync?: boolean;
+      historicalCreativeBackfill?: boolean;
       startDate?: string;
       endDate?: string;
     } = {}
@@ -158,8 +165,17 @@ export class IncrementalSyncManager {
       lookbackHours?: number;
       lookbackDays?: number;
       forceFullSync?: boolean;
+      historicalCreativeBackfill?: boolean;
     }
   ): SyncParams {
+    // For historical creative backfill, remove date filters entirely
+    if (options.historicalCreativeBackfill) {
+      return {
+        modifiedSince: undefined, // No date filtering for historical creative sync
+        pageToken: lastSync.next_page_token
+      };
+    }
+
     if (options.forceFullSync) {
       return {
         modifiedSince: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) // 30 days ago
@@ -218,7 +234,13 @@ export class IncrementalSyncManager {
       
       case 'asset_performance':
         return this.syncGoogleAssetPerformance(syncParams, batchId, options);
-      
+
+      case 'search_terms':
+        return this.syncGoogleSearchTerms(syncParams, batchId, options);
+
+      case 'geographic':
+        return this.syncGoogleGeographic(syncParams, batchId, options);
+
       default:
         throw new Error(`Unknown Google entity type: ${entityType}`);
     }
@@ -484,8 +506,10 @@ export class IncrementalSyncManager {
 
   private async syncMetaAds(syncParams: SyncParams, batchId: string): Promise<any> {
     try {
+      const isHistoricalBackfill = !syncParams.modifiedSince;
       logger.info('Syncing Meta ads with creatives', { 
-        modifiedSince: syncParams.modifiedSince.toISOString(),
+        modifiedSince: syncParams.modifiedSince?.toISOString() || 'No date filter (historical backfill)',
+        historicalBackfill: isHistoricalBackfill,
         batchId 
       });
 
@@ -501,6 +525,7 @@ export class IncrementalSyncManager {
 
       logger.info('Meta ads sync completed', {
         adCount: adsWithCreatives.length,
+        historicalBackfill: isHistoricalBackfill,
         result
       });
 
@@ -514,8 +539,10 @@ export class IncrementalSyncManager {
 
   private async syncMetaCreatives(syncParams: SyncParams, batchId: string): Promise<any> {
     try {
+      const isHistoricalBackfill = !syncParams.modifiedSince;
       logger.info('Syncing Meta creatives', { 
-        modifiedSince: syncParams.modifiedSince.toISOString(),
+        modifiedSince: syncParams.modifiedSince?.toISOString() || 'No date filter (historical backfill)',
+        historicalBackfill: isHistoricalBackfill,
         batchId 
       });
 
@@ -591,6 +618,72 @@ export class IncrementalSyncManager {
 
     } catch (error) {
       logger.error('Google asset performance sync failed', { error: error.message });
+      throw error;
+    }
+  }
+
+  private async syncGoogleSearchTerms(syncParams: SyncParams, batchId: string, options: any = {}): Promise<any> {
+    try {
+      const startDate = options.startDate ? new Date(options.startDate) : undefined;
+      const endDate = options.endDate ? new Date(options.endDate) : undefined;
+
+      logger.info('Syncing Google Ads search term data', {
+        modifiedSince: syncParams.modifiedSince?.toISOString(),
+        startDate: startDate?.toISOString(),
+        endDate: endDate?.toISOString(),
+        batchId
+      });
+
+      const searchTermData = await this.googleSearchTermsExtractor.extractSearchTermPerformance(
+        startDate,
+        endDate,
+        startDate && endDate ? undefined : syncParams.modifiedSince
+      );
+
+      const result = await this.batchProcessor.processGoogleSearchTermPerformance(searchTermData, batchId);
+
+      logger.info('Google search terms sync completed', {
+        searchTermRecords: searchTermData.length,
+        result
+      });
+
+      return result;
+
+    } catch (error) {
+      logger.error('Google search terms sync failed', { error: error.message });
+      throw error;
+    }
+  }
+
+  private async syncGoogleGeographic(syncParams: SyncParams, batchId: string, options: any = {}): Promise<any> {
+    try {
+      const startDate = options.startDate ? new Date(options.startDate) : undefined;
+      const endDate = options.endDate ? new Date(options.endDate) : undefined;
+
+      logger.info('Syncing Google Ads geographic data', {
+        modifiedSince: syncParams.modifiedSince?.toISOString(),
+        startDate: startDate?.toISOString(),
+        endDate: endDate?.toISOString(),
+        batchId
+      });
+
+      const geoData = await this.googleGeographicExtractor.extractGeographicPerformance(
+        startDate,
+        endDate,
+        startDate && endDate ? undefined : syncParams.modifiedSince
+      );
+
+      const result = await this.batchProcessor.processGoogleGeographicPerformance(geoData, batchId);
+
+      logger.info('Google geographic sync completed', {
+        geographicRecords: geoData.length,
+        result
+      });
+
+      return result;
+
+    } catch (error) {
+      logger.error('Google geographic sync failed', { error: error.message });
       throw error;
     }
   }
@@ -712,52 +805,56 @@ export class IncrementalSyncManager {
 
   async syncCampaigns(
     platform: 'google' | 'meta',
-    mode: 'incremental' | 'full',
+    mode: 'incremental' | 'full' | 'historical-backfill',
     options: any
   ): Promise<SyncResult> {
     return this.performIncrementalSync(platform, 'campaigns', {
       ...options,
-      forceFullSync: mode === 'full'
+      forceFullSync: mode === 'full',
+      historicalCreativeBackfill: mode === 'historical-backfill'
     });
   }
 
   async syncAdGroups(
     platform: 'google' | 'meta',
-    mode: 'incremental' | 'full',
+    mode: 'incremental' | 'full' | 'historical-backfill',
     options: any
   ): Promise<SyncResult> {
     const entityType = platform === 'google' ? 'ad_groups' : 'adsets';
     return this.performIncrementalSync(platform, entityType, {
       ...options,
-      forceFullSync: mode === 'full'
+      forceFullSync: mode === 'full',
+      historicalCreativeBackfill: mode === 'historical-backfill'
     });
   }
 
   async syncAds(
     platform: 'google' | 'meta',
-    mode: 'incremental' | 'full',
+    mode: 'incremental' | 'full' | 'historical-backfill',
     options: any
   ): Promise<SyncResult> {
     return this.performIncrementalSync(platform, 'ads', {
       ...options,
-      forceFullSync: mode === 'full'
+      forceFullSync: mode === 'full',
+      historicalCreativeBackfill: mode === 'historical-backfill'
     });
   }
 
   async syncCreatives(
     platform: 'google' | 'meta',
-    mode: 'incremental' | 'full',
+    mode: 'incremental' | 'full' | 'historical-backfill',
     options: any
   ): Promise<SyncResult> {
     return this.performIncrementalSync(platform, 'creatives', {
       ...options,
-      forceFullSync: mode === 'full'
+      forceFullSync: mode === 'full',
+      historicalCreativeBackfill: mode === 'historical-backfill'
     });
   }
 
   async syncKeywords(
     platform: 'google' | 'meta',
-    mode: 'incremental' | 'full',
+    mode: 'incremental' | 'full' | 'historical-backfill',
     options: any
   ): Promise<SyncResult> {
     if (platform !== 'google') {
@@ -766,19 +863,21 @@ export class IncrementalSyncManager {
     
     return this.performIncrementalSync(platform, 'keywords', {
       ...options,
-      forceFullSync: mode === 'full'
+      forceFullSync: mode === 'full',
+      historicalCreativeBackfill: mode === 'historical-backfill'
     });
   }
 
   async syncPerformance(
     platform: 'google' | 'meta',
-    mode: 'incremental' | 'full',
+    mode: 'incremental' | 'full' | 'historical-backfill',
     options: any
   ): Promise<SyncResult> {
     const entityType = platform === 'google' ? 'performance' : 'insights';
     return this.performIncrementalSync(platform, entityType, {
       ...options,
-      forceFullSync: mode === 'full'
+      forceFullSync: mode === 'full',
+      historicalCreativeBackfill: mode === 'historical-backfill'
     });
   }
 }
