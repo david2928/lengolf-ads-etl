@@ -506,14 +506,15 @@ export class GoogleAdsPerformanceExtractor {
         whereClause += ` AND segments.date >= '${modifiedSinceFormatted}'`;
       }
 
-      // Query for Performance Max asset performance
-      // Note: Some metrics like average_cpm are not compatible with ASSET_GROUP_ASSET resource
+      // Query for Performance Max asset GROUP performance
+      // Note: asset_group_asset does NOT support segments.date or standard metrics.
+      // Use asset_group resource instead for PMax performance with date segmentation.
       const gaql = `
-        SELECT 
-          asset_group_asset.asset,
+        SELECT
           asset_group.id,
+          asset_group.name,
+          asset_group.status,
           campaign.id,
-          asset.type,
           segments.date,
           metrics.impressions,
           metrics.clicks,
@@ -523,9 +524,9 @@ export class GoogleAdsPerformanceExtractor {
           metrics.ctr,
           metrics.average_cpc,
           metrics.view_through_conversions
-        FROM asset_group_asset 
+        FROM asset_group
         ${whereClause}
-        AND asset_group_asset.status != 'REMOVED'
+        AND asset_group.status != 'REMOVED'
         AND campaign.advertising_channel_type = 'PERFORMANCE_MAX'
         ORDER BY segments.date DESC
       `;
@@ -536,46 +537,52 @@ export class GoogleAdsPerformanceExtractor {
       });
 
       const rows = await adsClient.executeQuery(gaql);
-      
-      logger.debug(`Google Ads API returned ${rows.length} asset performance records`);
+
+      logger.info(`Google Ads API returned ${rows.length} asset group performance records`);
+
+      if (rows.length > 0) {
+        logger.info('Sample asset group row structure', {
+          sampleKeys: Object.keys(rows[0]),
+          sampleRow: JSON.stringify(rows[0]).substring(0, 500)
+        });
+      }
 
       const performanceData: GoogleAdsAssetPerformance[] = [];
       const uniqueKeys = new Set<string>();
 
       for (const row of rows) {
-        const assetId = row.assetGroupAsset?.asset?.split('/').pop() || '';
-        const assetGroupId = row.assetGroup?.id?.toString() || '';
+        // asset_group resource - use asset_group.id as the asset_id (it's the asset group ID)
+        const assetGroupId = row.asset_group?.id?.toString() || row.assetGroup?.id?.toString() || '';
+        const assetGroupName = row.asset_group?.name || row.assetGroup?.name || '';
         const campaignId = row.campaign?.id?.toString() || '';
-        const assetType = row.asset?.type || '';
+        const assetGroupStatus = row.asset_group?.status || row.assetGroup?.status || '';
         const date = row.segments?.date || '';
-        
+
         // Create unique key for deduplication
-        const uniqueKey = `${assetId}:${date}`;
-        
+        const uniqueKey = `${assetGroupId}:${date}`;
+
         // Skip records with missing required fields
-        if (!assetId || !campaignId || !date) {
-          logger.warn('Skipping Google asset performance record with missing required fields', {
-            asset_id: assetId,
+        if (!assetGroupId || !campaignId || !date) {
+          logger.warn('Skipping Google asset group performance record with missing required fields', {
             asset_group_id: assetGroupId,
             campaign_id: campaignId,
-            asset_type: assetType,
             date
           });
           continue;
         }
-        
+
         // Skip duplicates
         if (uniqueKeys.has(uniqueKey)) {
           continue;
         }
-        
+
         uniqueKeys.add(uniqueKey);
 
         const data: GoogleAdsAssetPerformance = {
-          asset_id: assetId,
+          asset_id: assetGroupId, // Using asset_group_id as the primary ID
           asset_group_id: assetGroupId,
           campaign_id: campaignId,
-          asset_type: assetType.toLowerCase(),
+          asset_type: 'asset_group', // PMax asset group performance
           date,
           impressions: parseInt(row.metrics?.impressions?.toString() || '0'),
           clicks: parseInt(row.metrics?.clicks?.toString() || '0'),
@@ -584,7 +591,7 @@ export class GoogleAdsPerformanceExtractor {
           conversion_value_micros: parseInt(row.metrics?.conversions_value?.toString() || '0'),
           ctr: parseFloat(row.metrics?.ctr?.toString() || '0'),
           avg_cpc_micros: parseInt(row.metrics?.average_cpc?.toString() || '0'),
-          avg_cpm_micros: 0, // Not available for ASSET_GROUP_ASSET resource
+          avg_cpm_micros: 0,
           view_through_conversions: parseFloat(row.metrics?.view_through_conversions?.toString() || '0')
         };
 
