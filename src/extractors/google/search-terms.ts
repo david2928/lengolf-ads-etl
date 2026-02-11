@@ -110,14 +110,15 @@ export class GoogleAdsSearchTermsExtractor {
         const resourceParts = resourceName.toString().split('~');
         const keywordId = resourceParts.length > 1 ? parseInt(resourceParts[1]) || 0 : 0;
 
-        const matchType = row.segments?.search_term_match_type || row.segments?.searchTermMatchType || '';
+        const rawMatchType = row.segments?.search_term_match_type || row.segments?.searchTermMatchType || '';
+        const matchType = String(rawMatchType).toLowerCase();
 
         const data: GoogleAdsSearchTermPerformance = {
           search_term: searchTerm,
           campaign_id: campaignId,
           ad_group_id: adGroupId,
           keyword_id: keywordId,
-          match_type: matchType.toLowerCase(),
+          match_type: matchType,
           date,
           impressions: parseInt(row.metrics?.impressions?.toString() || '0'),
           clicks: parseInt(row.metrics?.clicks?.toString() || '0'),
