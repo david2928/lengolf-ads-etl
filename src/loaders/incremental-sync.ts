@@ -108,10 +108,13 @@ export class IncrementalSyncManager {
       return syncResult;
 
     } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : (typeof error === 'string' ? error : JSON.stringify(error));
       logger.error('Incremental sync failed', {
         platform,
         entityType,
-        error: error.message
+        error: errorMsg,
+        errorType: error?.constructor?.name,
+        fullError: typeof error === 'object' ? JSON.stringify(error, Object.getOwnPropertyNames(error || {})).substring(0, 1000) : String(error)
       });
 
       // Try to update the batch status to failed if batchId exists
@@ -123,7 +126,7 @@ export class IncrementalSyncManager {
             records_inserted: 0,
             records_updated: 0,
             records_failed: 0,
-            error_message: error.message
+            error_message: errorMsg || 'Unknown error'
           });
         } catch (updateError) {
           logger.error('Failed to update batch status to failed', { updateError: updateError.message });
@@ -140,7 +143,7 @@ export class IncrementalSyncManager {
         recordsFailed: 0,
         duration: Date.now() - startTime,
         status: 'failed',
-        errorMessage: error.message
+        errorMessage: errorMsg
       };
     }
   }

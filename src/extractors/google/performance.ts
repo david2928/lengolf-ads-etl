@@ -399,15 +399,23 @@ export class GoogleAdsPerformanceExtractor {
       });
 
       const rows = await adsClient.executeQuery(gaql);
-      
-      logger.debug(`Google Ads API returned ${rows.length} ad performance records`);
+
+      logger.info(`Google Ads API returned ${rows.length} ad performance records`);
+
+      if (rows.length > 0) {
+        logger.info('Sample ad performance row structure', {
+          sampleKeys: Object.keys(rows[0]),
+          sampleRow: JSON.stringify(rows[0]).substring(0, 500)
+        });
+      }
 
       const performanceData: GoogleAdsAdPerformance[] = [];
       const uniqueKeys = new Set<string>();
 
       for (const row of rows) {
-        const adId = row.adGroupAd?.ad?.id?.toString() || '';
-        const adGroupId = row.adGroup?.id?.toString() || '';
+        // Handle both camelCase (google-ads-api) and snake_case naming
+        const adId = row.ad_group_ad?.ad?.id?.toString() || row.adGroupAd?.ad?.id?.toString() || '';
+        const adGroupId = row.ad_group?.id?.toString() || row.adGroup?.id?.toString() || '';
         const campaignId = row.campaign?.id?.toString() || '';
         const date = row.segments?.date || '';
         

@@ -53,9 +53,10 @@ export class GoogleAdsSearchTermsExtractor {
       const gaql = `
         SELECT
           search_term_view.search_term,
+          search_term_view.resource_name,
+          search_term_view.status,
           campaign.id,
           ad_group.id,
-          search_term_view.ad_group_criterion,
           segments.date,
           segments.search_term_match_type,
           metrics.impressions,
@@ -78,10 +79,17 @@ export class GoogleAdsSearchTermsExtractor {
       const performanceData: GoogleAdsSearchTermPerformance[] = [];
       const uniqueKeys = new Set<string>();
 
+      if (results.length > 0) {
+        logger.debug('Sample search term row structure', {
+          sampleKeys: Object.keys(results[0]),
+          sampleRow: JSON.stringify(results[0]).substring(0, 500)
+        });
+      }
+
       for (const row of results) {
-        const searchTerm = row.searchTermView?.searchTerm || row.search_term_view?.search_term || '';
+        const searchTerm = row.search_term_view?.search_term || row.searchTermView?.searchTerm || '';
         const campaignId = parseInt(row.campaign?.id?.toString() || '0');
-        const adGroupId = parseInt(row.adGroup?.id?.toString() || row.ad_group?.id?.toString() || '0');
+        const adGroupId = parseInt(row.ad_group?.id?.toString() || row.adGroup?.id?.toString() || '0');
         const date = row.segments?.date || '';
 
         // Skip records with missing required fields
@@ -96,12 +104,13 @@ export class GoogleAdsSearchTermsExtractor {
         }
         uniqueKeys.add(uniqueKey);
 
-        // Extract criterion ID from resource name (format: customers/xxx/adGroupCriteria/yyy~zzz)
-        const criterionResource = row.searchTermView?.adGroupCriterion || row.search_term_view?.ad_group_criterion || '';
-        const criterionParts = criterionResource.toString().split('~');
-        const keywordId = criterionParts.length > 1 ? parseInt(criterionParts[criterionParts.length - 1]) : 0;
+        // Extract keyword criterion ID from resource name
+        // Format: customers/{customer_id}/searchTermViews/{campaign_id}~{ad_group_id}~{query_hash}
+        const resourceName = row.search_term_view?.resource_name || row.searchTermView?.resourceName || '';
+        const resourceParts = resourceName.toString().split('~');
+        const keywordId = resourceParts.length > 1 ? parseInt(resourceParts[1]) || 0 : 0;
 
-        const matchType = row.segments?.searchTermMatchType || row.segments?.search_term_match_type || '';
+        const matchType = row.segments?.search_term_match_type || row.segments?.searchTermMatchType || '';
 
         const data: GoogleAdsSearchTermPerformance = {
           search_term: searchTerm,

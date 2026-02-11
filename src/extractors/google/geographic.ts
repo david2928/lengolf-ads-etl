@@ -54,11 +54,9 @@ export class GoogleAdsGeographicExtractor {
         SELECT
           geographic_view.country_criterion_id,
           geographic_view.location_type,
+          geographic_view.resource_name,
           campaign.id,
           segments.date,
-          segments.geo_target_city,
-          segments.geo_target_region,
-          segments.geo_target_country,
           metrics.impressions,
           metrics.clicks,
           metrics.cost_micros,
@@ -79,23 +77,29 @@ export class GoogleAdsGeographicExtractor {
       const performanceData: GoogleAdsGeographicPerformance[] = [];
       const uniqueKeys = new Set<string>();
 
+      if (results.length > 0) {
+        logger.debug('Sample geographic row structure', {
+          sampleKeys: Object.keys(results[0]),
+          sampleRow: JSON.stringify(results[0]).substring(0, 500)
+        });
+      }
+
       for (const row of results) {
         const campaignId = parseInt(row.campaign?.id?.toString() || '0');
         const date = row.segments?.date || '';
 
-        // Extract geo target constant - use city, region, or country
-        const geoTargetCity = row.segments?.geoTargetCity || row.segments?.geo_target_city || '';
-        const geoTargetRegion = row.segments?.geoTargetRegion || row.segments?.geo_target_region || '';
-        const geoTargetCountry = row.segments?.geoTargetCountry || row.segments?.geo_target_country || '';
+        // Extract location info from resource_name
+        // Format: customers/{customer_id}/geographicViews/{country_criterion_id}~{location_type}
+        const resourceName = row.geographic_view?.resource_name || row.geographicView?.resourceName || '';
+        const resourceParts = resourceName.toString().split('/');
+        const geoViewPart = resourceParts[resourceParts.length - 1] || '';
+        const geoParts = geoViewPart.split('~');
 
-        // Use most specific available geo target
-        const geoTargetConstant = geoTargetCity || geoTargetRegion || geoTargetCountry || '';
+        const countryCriterionId = row.geographic_view?.country_criterion_id || row.geographicView?.countryCriterionId || '';
+        const locationType = (row.geographic_view?.location_type || row.geographicView?.locationType || '').toString().toLowerCase();
 
-        // Extract location name from resource name (format: geoTargetConstants/XXXXX)
-        const locationName = geoTargetConstant.split('/').pop() || geoTargetConstant;
-
-        const locationType = (row.geographicView?.locationType || row.geographic_view?.location_type || '').toString().toLowerCase();
-        const countryCriterionId = row.geographicView?.countryCriterionId || row.geographic_view?.country_criterion_id || '';
+        // Use the first part of the resource as the geo target constant (criterion ID)
+        const geoTargetConstant = geoParts[0] || countryCriterionId.toString() || '';
 
         if (!date || !geoTargetConstant) {
           continue;
@@ -110,8 +114,8 @@ export class GoogleAdsGeographicExtractor {
 
         const data: GoogleAdsGeographicPerformance = {
           campaign_id: campaignId,
-          geo_target_constant: locationName,
-          location_name: locationName,
+          geo_target_constant: geoTargetConstant,
+          location_name: geoTargetConstant, // Will be enriched later with geo target constant API
           location_type: locationType,
           country_code: countryCriterionId.toString(),
           date,
