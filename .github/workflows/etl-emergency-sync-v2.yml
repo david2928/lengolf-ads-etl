@@ -206,33 +206,41 @@ jobs:
           
           echo "Date range: $START_DATE to $END_DATE"
           
-          for platform in meta google; do
-            echo "Historical sync for $platform..."
-            
-            ENTITY="insights"
-            if [ "$platform" = "google" ]; then
-              ENTITY="performance"
-            fi
-            
+          # Meta insights
+          echo "Historical sync for Meta insights..."
+          RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"platform\": \"meta\", \"mode\": \"full\", \"entities\": [\"insights\"], \"startDate\": \"$START_DATE\", \"endDate\": \"$END_DATE\"}" \
+            "http://localhost:8080/api/sync")
+          HTTP_CODE=${RESPONSE: -3}
+          BODY=${RESPONSE%???}
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ Meta historical sync failed (HTTP $HTTP_CODE)"
+            echo "$BODY"
+            exit 1
+          fi
+          echo "✅ Meta historical sync completed"
+          echo "$BODY" | jq '.summary'
+          sleep 30
+
+          # Google performance entities (all types)
+          for entity in performance ad_performance asset_performance search_terms geographic; do
+            echo "Historical sync for Google $entity..."
             RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
               -H "Content-Type: application/json" \
-              -d "{\"platform\": \"$platform\", \"mode\": \"full\", \"entities\": [\"$ENTITY\"], \"startDate\": \"$START_DATE\", \"endDate\": \"$END_DATE\"}" \
+              -d "{\"platform\": \"google\", \"mode\": \"full\", \"entities\": [\"$entity\"], \"startDate\": \"$START_DATE\", \"endDate\": \"$END_DATE\"}" \
               "http://localhost:8080/api/sync")
-            
             HTTP_CODE=${RESPONSE: -3}
             BODY=${RESPONSE%???}
-            
             if [ "$HTTP_CODE" != "200" ]; then
-              echo "❌ $platform historical sync failed (HTTP $HTTP_CODE)"
+              echo "⚠️ Google $entity historical sync failed (HTTP $HTTP_CODE)"
               echo "$BODY"
-              exit 1
+              # Don't exit - continue with other entities
+            else
+              echo "✅ Google $entity historical sync completed"
+              echo "$BODY" | jq '.summary'
             fi
-            
-            echo "✅ $platform historical sync completed"
-            echo "$BODY" | jq '.summary'
-            
-            # Add delay between platforms to avoid rate limiting
-            sleep 30
+            sleep 15
           done
 
       - name: Meta Only Sync
@@ -266,7 +274,7 @@ jobs:
         run: |
           echo "🔍 Performing Google-only full sync..."
           
-          for entity in campaigns ad_groups ads keywords performance; do
+          for entity in campaigns ad_groups ads keywords performance ad_performance asset_performance search_terms geographic; do
             echo "Syncing Google $entity..."
             
             RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
@@ -324,23 +332,25 @@ jobs:
           
           echo "✅ Meta insights sync completed"
           
-          # Google performance
-          echo "Syncing Google performance..."
-          GOOGLE_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{\"platform\": \"google\", \"mode\": \"full\", \"entities\": [\"performance\"], \"startDate\": \"$START_DATE\", \"endDate\": \"$END_DATE\"}" \
-            "http://localhost:8080/api/sync")
-          
-          GOOGLE_HTTP_CODE=${GOOGLE_RESPONSE: -3}
-          GOOGLE_BODY=${GOOGLE_RESPONSE%???}
-          
-          if [ "$GOOGLE_HTTP_CODE" != "200" ]; then
-            echo "❌ Google performance sync failed (HTTP $GOOGLE_HTTP_CODE)"
-            echo "$GOOGLE_BODY"
-            exit 1
-          fi
-          
-          echo "✅ Google performance sync completed"
+          # Google performance (all entity types)
+          for entity in performance ad_performance asset_performance search_terms geographic; do
+            echo "Syncing Google $entity..."
+            GOOGLE_RESPONSE=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $ETL_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"platform\": \"google\", \"mode\": \"full\", \"entities\": [\"$entity\"], \"startDate\": \"$START_DATE\", \"endDate\": \"$END_DATE\"}" \
+              "http://localhost:8080/api/sync")
+
+            GOOGLE_HTTP_CODE=${GOOGLE_RESPONSE: -3}
+            GOOGLE_BODY=${GOOGLE_RESPONSE%???}
+
+            if [ "$GOOGLE_HTTP_CODE" != "200" ]; then
+              echo "⚠️ Google $entity sync failed (HTTP $GOOGLE_HTTP_CODE)"
+              echo "$GOOGLE_BODY"
+            else
+              echo "✅ Google $entity sync completed"
+            fi
+            sleep 10
+          done
 
       - name: Final Status Check
         run: |
