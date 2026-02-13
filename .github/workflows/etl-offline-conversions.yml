@@ -1,0 +1,121 @@
+name: ETL Offline Conversion Upload
+
+on:
+  schedule:
+    # Run daily at 3 AM UTC (10 AM Thailand time)
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  upload-conversions:
+    name: Upload Offline Conversions to Google Ads
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+
+      - name: Setup environment variables
+        run: |
+          echo "PORT=8080" >> $GITHUB_ENV
+          echo "NODE_ENV=production" >> $GITHUB_ENV
+          echo "LOG_LEVEL=info" >> $GITHUB_ENV
+          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> $GITHUB_ENV
+          echo "SUPABASE_SERVICE_KEY=${{ secrets.SUPABASE_SERVICE_KEY }}" >> $GITHUB_ENV
+          echo "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}" >> $GITHUB_ENV
+          echo "GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" >> $GITHUB_ENV
+          echo "GOOGLE_CUSTOMER_ID=${{ secrets.GOOGLE_CUSTOMER_ID }}" >> $GITHUB_ENV
+          echo "GOOGLE_DEVELOPER_TOKEN=${{ secrets.GOOGLE_DEVELOPER_TOKEN }}" >> $GITHUB_ENV
+          echo "GOOGLE_CONVERSION_ACTION_ID=${{ secrets.GOOGLE_CONVERSION_ACTION_ID }}" >> $GITHUB_ENV
+          echo "GOOGLE_SERVICE_ACCOUNT_KEY=${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY }}" >> $GITHUB_ENV
+          echo "META_APP_ID=${{ secrets.META_APP_ID }}" >> $GITHUB_ENV
+          echo "META_APP_SECRET=${{ secrets.META_APP_SECRET }}" >> $GITHUB_ENV
+          echo "META_AD_ACCOUNT_ID=${{ secrets.META_AD_ACCOUNT_ID }}" >> $GITHUB_ENV
+          echo "ETL_API_KEY=${{ secrets.ETL_API_KEY }}" >> $GITHUB_ENV
+
+      - name: Start ETL service
+        run: |
+          echo "Starting ETL service in background..."
+          npm start &
+          ETL_PID=$!
+          echo "ETL_PID=$ETL_PID" >> $GITHUB_ENV
+
+          echo "Waiting for ETL service to start..."
+          for i in {1..30}; do
+            if curl -f http://localhost:8080/health >/dev/null 2>&1; then
+              echo "ETL service is ready!"
+              break
+            fi
+            echo "Waiting... ($i/30)"
+            sleep 2
+          done
+
+          if ! curl -f http://localhost:8080/health >/dev/null 2>&1; then
+            echo "ETL service failed to start"
+            exit 1
+          fi
+
+      - name: Upload Offline Conversions
+        run: |
+          echo "Uploading offline conversions to Google Ads..."
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -H "Authorization: Bearer ${{ secrets.ETL_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d '{"platform":"google","mode":"incremental","entities":["offline_conversions"]}' \
+            http://localhost:8080/api/sync)
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          echo "HTTP Status: $HTTP_CODE"
+          echo "Response:"
+          echo "$BODY" | jq '.' 2>/dev/null || echo "$BODY"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Offline conversion upload failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+          SUCCESS=$(echo "$BODY" | jq -r '.success // false')
+          OVERALL_STATUS=$(echo "$BODY" | jq -r '.status // "unknown"')
+
+          # Extract summary
+          PROCESSED=$(echo "$BODY" | jq -r '.summary.totalRecordsProcessed // 0')
+          INSERTED=$(echo "$BODY" | jq -r '.summary.totalRecordsInserted // 0')
+          FAILED=$(echo "$BODY" | jq -r '.summary.totalRecordsFailed // 0')
+
+          echo ""
+          echo "=== Upload Summary ==="
+          echo "Records processed: $PROCESSED"
+          echo "Records uploaded:  $INSERTED"
+          echo "Records failed:    $FAILED"
+          echo "Status:            $OVERALL_STATUS"
+          echo "======================"
+
+          # Fail only on complete failure, not partial
+          if [ "$OVERALL_STATUS" = "failed" ]; then
+            echo "Upload completely failed"
+            exit 1
+          fi
+
+      - name: Cleanup
+        if: always()
+        run: |
+          if [ -n "$ETL_PID" ]; then
+            kill $ETL_PID 2>/dev/null || true
+            echo "ETL service stopped"
+          fi

@@ -31,7 +31,7 @@ router.post('/sync', asyncHandler(async (req: Request, res: Response) => {
   const validEntityTypes = [
     'campaigns', 'ad_groups', 'adsets', 'ads', 'creatives', 'keywords',
     'performance', 'insights', 'ad_performance', 'creative_performance', 'asset_performance',
-    'search_terms', 'geographic'
+    'search_terms', 'geographic', 'offline_conversions'
   ];
   
   const invalidEntities = entities.filter(entity => !validEntityTypes.includes(entity));
@@ -169,6 +169,15 @@ router.post('/sync', asyncHandler(async (req: Request, res: Response) => {
                 });
               } else {
                 logger.warn(`Geographic performance not supported for platform: ${plt}`);
+                continue;
+              }
+              break;
+
+            case 'offline_conversions':
+              if (plt === 'google') {
+                syncResult = await syncManager.syncOfflineConversions();
+              } else {
+                logger.warn(`Offline conversions not supported for platform: ${plt}`);
                 continue;
               }
               break;

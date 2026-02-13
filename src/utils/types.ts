@@ -2,7 +2,7 @@
 
 export interface SyncRequest {
   platform?: 'google' | 'meta' | 'all';
-  mode: 'incremental' | 'full';
+  mode: 'incremental' | 'full' | 'historical-backfill';
   entities: string[];
   lookbackHours?: number;
   lookbackDays?: number;
@@ -202,6 +202,6 @@ export interface TokenData {
 }
 
 export interface SyncParams {
-  modifiedSince: Date;
+  modifiedSince?: Date;
   pageToken?: string;
 }

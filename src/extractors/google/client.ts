@@ -31,7 +31,7 @@ export class GoogleAdsClient {
         tokenType: tokenInfo.token_type,
         scope: tokenInfo.scope,
         expiresAt: tokenInfo.expires_at,
-        refreshTokenPrefix: tokenInfo.refresh_token?.substring(0, 20) + '...'
+        refreshTokenPrefix: tokenInfo.refresh_token?.substring(0, 6) + '***'
       });
 
       // Initialize Google Ads API client
@@ -359,30 +359,105 @@ export class GoogleAdsClient {
   }
 
   /**
-   * Upload click conversions to Google Ads for offline conversion tracking.
-   * Uses the ConversionUploadService via the google-ads-api library.
+   * Upload Enhanced Conversions for Leads to Google Ads via the library's
+   * native gRPC-based ConversionUploadService.
+   *
+   * Uses hashed user identifiers (email/phone) instead of GCLID.
+   * Docs: https://developers.google.com/google-ads/api/docs/conversions/upload-clicks
    */
-  async uploadClickConversions(customerId: string, conversions: any[]): Promise<void> {
+  async uploadEnhancedConversions(
+    customerId: string,
+    conversions: any[]
+  ): Promise<{
+    results: Array<{ success: boolean; error?: string }>;
+    successCount: number;
+    failureCount: number;
+  }> {
     if (!this.customer) {
       await this.initializeClient();
     }
 
     try {
-      // The google-ads-api library supports uploadClickConversions via customer.conversionUploads
-      // If not directly available, we fall back to the mutate API
-      if (typeof (this.customer as any).uploadClickConversions === 'function') {
-        await (this.customer as any).uploadClickConversions(conversions);
+      logger.info('Uploading enhanced conversions via gRPC', {
+        conversionCount: conversions.length,
+        customerId
+      });
+
+      // Convert from our camelCase format to the library's snake_case format
+      const grpcConversions = conversions.map(conv => ({
+        conversion_action: conv.conversionAction,
+        conversion_date_time: conv.conversionDateTime,
+        conversion_value: conv.conversionValue,
+        currency_code: conv.currencyCode,
+        consent: {
+          ad_user_data: 2,  // GRANTED
+          ad_personalization: 2  // GRANTED
+        },
+        user_identifiers: conv.userIdentifiers.map((id: any) => {
+          if (id.hashedEmail) return { hashed_email: id.hashedEmail };
+          if (id.hashedPhoneNumber) return { hashed_phone_number: id.hashedPhoneNumber };
+          return id;
+        })
+      }));
+
+      const response = await this.customer.conversionUploads.uploadClickConversions({
+        customer_id: customerId,
+        conversions: grpcConversions,
+        partial_failure: true
+      } as any) as any;
+
+      // Parse results
+      const results: Array<{ success: boolean; error?: string }> = [];
+      let successCount = 0;
+      let failureCount = 0;
+
+      if (response.partial_failure_error) {
+        // Some conversions failed
+        logger.warn('Partial failure in conversion upload', {
+          partialFailureError: response.partial_failure_error
+        });
+
+        const failedIndices = new Set<number>();
+        const details = response.partial_failure_error?.details || [];
+        details.forEach((detail: any) => {
+          const errors = detail?.errors || [];
+          errors.forEach((err: any) => {
+            const fieldPath = err?.location?.field_path_elements || [];
+            const convIdx = fieldPath.find((fp: any) => fp.field_name === 'conversions');
+            if (convIdx?.index !== undefined) {
+              failedIndices.add(convIdx.index);
+            }
+          });
+        });
+
+        for (let i = 0; i < conversions.length; i++) {
+          if (failedIndices.has(i)) {
+            results.push({ success: false, error: 'Partial failure' });
+            failureCount++;
+          } else {
+            results.push({ success: true });
+            successCount++;
+          }
+        }
       } else {
-        // Use REST API directly for conversion upload
-        // This is a placeholder - actual implementation depends on google-ads-api version
-        logger.warn('uploadClickConversions not directly available on Customer object. ' +
-          'Offline conversion upload requires google-ads-api v14+ or direct REST API call. ' +
-          'Conversions prepared but not uploaded.');
-        throw new Error('Offline conversion upload not yet supported by current google-ads-api version. ' +
-          'Please upgrade to v14+ or implement direct REST API call.');
+        // All succeeded
+        successCount = conversions.length;
+        for (let i = 0; i < conversions.length; i++) {
+          results.push({ success: true });
+        }
       }
+
+      logger.info('Enhanced conversion upload results', {
+        successCount,
+        failureCount,
+        jobId: response.job_id,
+        totalResults: results.length
+      });
+
+      return { results, successCount, failureCount };
+
     } catch (error) {
-      logger.error('Failed to upload click conversions', {
+      logger.error('Failed to upload enhanced conversions', {
         error: getErrorMessage(error),
         conversionCount: conversions.length
       });
@@ -403,7 +478,7 @@ export class GoogleAdsClient {
       return true;
 
     } catch (error) {
-      logger.error('Google Ads connection test failed', { error: error.message });
+      logger.error('Google Ads connection test failed', { error: getErrorMessage(error) });
       return false;
     }
   }

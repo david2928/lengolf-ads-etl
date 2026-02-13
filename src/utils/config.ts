@@ -6,25 +6,26 @@ config();
 interface Config {
   port: number;
   nodeEnv: string;
-  
+
   // Supabase
   supabaseUrl: string;
   supabaseServiceKey: string;
-  
+
   // Google Ads
   googleClientId: string;
   googleClientSecret: string;
   googleCustomerId: string;
   googleDeveloperToken: string;
-  
+  googleConversionActionId: string;
+
   // Meta Ads
   metaAppId: string;
   metaAppSecret: string;
   metaAdAccountId: string;
-  
+
   // Authentication
   etlApiKey: string;
-  
+
   // Logging
   logLevel: string;
 }
@@ -62,6 +63,7 @@ export const appConfig: Config = {
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET!,
   googleCustomerId: process.env.GOOGLE_CUSTOMER_ID!,
   googleDeveloperToken: process.env.GOOGLE_DEVELOPER_TOKEN!,
+  googleConversionActionId: process.env.GOOGLE_CONVERSION_ACTION_ID || '',
   
   // Meta Ads
   metaAppId: process.env.META_APP_ID!,

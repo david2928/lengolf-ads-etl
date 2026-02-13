@@ -4,6 +4,7 @@ import GoogleAdsExtractor from '@/extractors/google/ads';
 import GoogleAdsPerformanceExtractor from '@/extractors/google/performance';
 import GoogleAdsSearchTermsExtractor from '@/extractors/google/search-terms';
 import GoogleAdsGeographicExtractor from '@/extractors/google/geographic';
+import GoogleAdsConversionUploader from '@/extractors/google/conversion-upload';
 import MetaCampaignsExtractor from '@/extractors/meta/campaigns';
 import MetaAdSetsExtractor from '@/extractors/meta/ad-sets';
 import MetaAdsExtractor from '@/extractors/meta/ads';
@@ -211,30 +212,25 @@ export class IncrementalSyncManager {
     batchId: string,
     options: any = {}
   ): Promise<any> {
-    logger.info('DEBUG: syncGoogleEntity called', { entityType, batchId });
     switch (entityType) {
       case 'campaigns':
-        logger.info('DEBUG: Routing to syncGoogleCampaigns');
         return this.syncGoogleCampaigns(syncParams, batchId);
-      
+
       case 'ad_groups':
-        logger.info('DEBUG: Routing to syncGoogleAdGroups');
         return this.syncGoogleAdGroups(syncParams, batchId);
-      
+
       case 'ads':
-        logger.info('DEBUG: Routing to syncGoogleAds');
         return this.syncGoogleAds(syncParams, batchId);
-      
+
       case 'keywords':
-        logger.info('DEBUG: Routing to syncGoogleKeywords');
         return this.syncGoogleKeywords(syncParams, batchId);
-      
+
       case 'performance':
         return this.syncGooglePerformance(syncParams, batchId, options);
-      
+
       case 'ad_performance':
         return this.syncGoogleAdPerformance(syncParams, batchId, options);
-      
+
       case 'asset_performance':
         return this.syncGoogleAssetPerformance(syncParams, batchId, options);
 
@@ -243,6 +239,17 @@ export class IncrementalSyncManager {
 
       case 'geographic':
         return this.syncGoogleGeographic(syncParams, batchId, options);
+
+      case 'offline_conversions': {
+        // Offline conversions have their own flow - delegate to syncOfflineConversions
+        const uploader = new GoogleAdsConversionUploader();
+        const uploadResult = await uploader.uploadPendingConversions();
+        return {
+          inserted: uploadResult.uploaded,
+          updated: 0,
+          failed: uploadResult.failed + uploadResult.skipped
+        };
+      }
 
       default:
         throw new Error(`Unknown Google entity type: ${entityType}`);
@@ -359,43 +366,23 @@ export class IncrementalSyncManager {
 
   private async syncGoogleKeywords(syncParams: SyncParams, batchId: string): Promise<any> {
     try {
-      logger.info('🔑 KEYWORD SYNC START', { 
+      logger.info('Syncing Google Ads keywords', {
         modifiedSince: syncParams.modifiedSince.toISOString(),
-        batchId,
-        extractorType: this.googleExtractor.constructor.name
+        batchId
       });
 
-      // Test if googleExtractor method exists and is callable
-      if (!this.googleExtractor.extractKeywords) {
-        logger.error('❌ extractKeywords method does not exist on googleExtractor');
-        return { inserted: 0, updated: 0, failed: 0 };
-      }
+      const keywords = await this.googleExtractor.extractKeywords(undefined, syncParams.modifiedSince);
+      const result = await this.batchProcessor.processGoogleKeywords(keywords, batchId);
 
-      logger.info('🚀 Calling extractKeywords directly...');
-      
-      try {
-        const keywords = await this.googleExtractor.extractKeywords(undefined, syncParams.modifiedSince);
-        logger.info('DEBUG: extractKeywords returned', { keywordCount: keywords.length });
-        
-        const result = await this.batchProcessor.processGoogleKeywords(keywords, batchId);
-        logger.info('DEBUG: processGoogleKeywords returned', { result });
+      logger.info('Google keywords sync completed', {
+        keywordCount: keywords.length,
+        result
+      });
 
-        logger.info('Google keywords sync completed', {
-          keywordCount: keywords.length,
-          result
-        });
-
-        return result;
-      } catch (innerError) {
-        logger.error('DEBUG: Error during keyword extraction/processing', { 
-          error: innerError.message, 
-          stack: innerError.stack 
-        });
-        throw innerError;
-      }
+      return result;
 
     } catch (error) {
-      logger.error('Google keywords sync failed', { error: error.message, stack: error.stack });
+      logger.error('Google keywords sync failed', { error: error.message });
       throw error;
     }
   }
@@ -882,6 +869,91 @@ export class IncrementalSyncManager {
       forceFullSync: mode === 'full',
       historicalCreativeBackfill: mode === 'historical-backfill'
     });
+  }
+
+  /**
+   * Upload offline conversions to Google Ads via Enhanced Conversions for Leads.
+   * This doesn't follow the normal extract-transform-load pattern; instead it:
+   *   1. Reads from the google_ads_offline_conversions view
+   *   2. Uploads to Google Ads API
+   *   3. Tracks results in marketing.google_ads_conversion_uploads
+   */
+  async syncOfflineConversions(): Promise<SyncResult> {
+    const startTime = Date.now();
+    let batchId = '';
+
+    try {
+      logger.info('Starting offline conversion upload');
+
+      // Create sync batch record
+      batchId = await this.supabase.createSyncBatch(
+        'google',
+        'upload',
+        ['offline_conversions']
+      );
+
+      const uploader = new GoogleAdsConversionUploader();
+      const uploadResult = await uploader.uploadPendingConversions();
+
+      const duration = Date.now() - startTime;
+
+      // Update sync batch
+      await this.supabase.updateSyncBatch(batchId, {
+        status: uploadResult.failed === 0 && uploadResult.errors.length === 0 ? 'completed' : 'partial',
+        records_processed: uploadResult.total,
+        records_inserted: uploadResult.uploaded,
+        records_updated: 0,
+        records_failed: uploadResult.failed + uploadResult.skipped,
+        error_message: uploadResult.errors.length > 0 ? uploadResult.errors.join('; ') : undefined
+      });
+
+      const syncResult: SyncResult = {
+        batchId,
+        platform: 'google',
+        entityType: 'offline_conversions',
+        recordsProcessed: uploadResult.total,
+        recordsInserted: uploadResult.uploaded,
+        recordsUpdated: 0,
+        recordsFailed: uploadResult.failed + uploadResult.skipped,
+        duration,
+        status: uploadResult.failed === 0 && uploadResult.errors.length === 0 ? 'completed' : 'partial'
+      };
+
+      logger.info('Offline conversion upload sync completed', syncResult);
+      return syncResult;
+
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      logger.error('Offline conversion upload sync failed', { error: errorMsg });
+
+      if (batchId) {
+        try {
+          await this.supabase.updateSyncBatch(batchId, {
+            status: 'failed',
+            records_processed: 0,
+            records_inserted: 0,
+            records_updated: 0,
+            records_failed: 0,
+            error_message: errorMsg
+          });
+        } catch (updateError) {
+          logger.error('Failed to update batch status', { error: (updateError as Error).message });
+        }
+      }
+
+      return {
+        batchId,
+        platform: 'google',
+        entityType: 'offline_conversions',
+        recordsProcessed: 0,
+        recordsInserted: 0,
+        recordsUpdated: 0,
+        recordsFailed: 0,
+        duration: Date.now() - startTime,
+        status: 'failed',
+        errorMessage: errorMsg
+      };
+    }
   }
 }
 
