@@ -441,6 +441,13 @@ export class GoogleAdsConversionUploader {
       return '+' + cleaned;
     }
 
+    // Handle 9-digit Thai mobile (missing leading 0)
+    // Common data quality issue: "983454402" should be "0983454402" → "+66983454402"
+    // Thai mobile numbers start with 06, 08, or 09
+    if (cleaned.length === 9 && /^[6-9]/.test(cleaned)) {
+      return '+660' + cleaned;
+    }
+
     // Ambiguous format - log and skip to avoid misattribution
     logger.debug('Could not normalize phone to E.164, skipping', { phone, cleaned });
     return null;
