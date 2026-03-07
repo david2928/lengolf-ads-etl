@@ -13,6 +13,7 @@ export interface OfflineConversionRecord {
   email: string | null;
   phone_number: string | null;
   conversion_time: string;  // timestamptz from view
+  conversion_name: string;  // 'Booking Confirmed' or 'Course Rental Confirmed'
   conversion_value: number;
   currency_code: string;
   customer_name: string | null;
@@ -75,9 +76,8 @@ export class GoogleAdsConversionUploader {
     };
 
     try {
-      // 1. Get the conversion action resource name
-      const conversionActionResourceName = this.getConversionActionResourceName();
-      if (!conversionActionResourceName) {
+      // 1. Validate that at least the primary conversion action is configured
+      if (!appConfig.googleConversionActionId) {
         throw new Error(
           'GOOGLE_CONVERSION_ACTION_ID not configured. ' +
           'Query conversion actions via /api/debug/gaql and set the env var.'
@@ -94,8 +94,7 @@ export class GoogleAdsConversionUploader {
       }
 
       logger.info('Fetched unuploaded conversions', {
-        count: records.length,
-        conversionAction: conversionActionResourceName
+        count: records.length
       });
 
       // 3. Stage all records as 'pending' in tracking table
@@ -110,6 +109,17 @@ export class GoogleAdsConversionUploader {
         if (userIdentifiers.length === 0) {
           result.skipped++;
           skippedIds.push(record.booking_id);
+          continue;
+        }
+
+        const conversionActionResourceName = this.getConversionActionForRecord(record.conversion_name);
+        if (!conversionActionResourceName) {
+          result.skipped++;
+          skippedIds.push(record.booking_id);
+          logger.warn('No conversion action configured for conversion_name', {
+            conversion_name: record.conversion_name,
+            booking_id: record.booking_id
+          });
           continue;
         }
 
@@ -214,11 +224,21 @@ export class GoogleAdsConversionUploader {
   }
 
   /**
-   * Get the conversion action resource name from config.
+   * Get the conversion action resource name for a given conversion_name.
+   * Maps view conversion_name values to the correct Google Ads conversion action.
    */
-  private getConversionActionResourceName(): string | null {
-    const actionId = appConfig.googleConversionActionId;
-    if (!actionId) return null;
+  private getConversionActionForRecord(conversionName: string): string | null {
+    let actionId: string;
+
+    if (conversionName === 'Course Rental Confirmed') {
+      actionId = appConfig.googleCourseRentalConversionActionId;
+      if (!actionId) return null;
+    } else {
+      // Default: 'Booking Confirmed' and any other conversion types
+      actionId = appConfig.googleConversionActionId;
+      if (!actionId) return null;
+    }
+
     // If user provided the full resource name, use it as-is
     if (actionId.startsWith('customers/')) return actionId;
     // Otherwise, build resource name from ID
@@ -233,7 +253,7 @@ export class GoogleAdsConversionUploader {
     // Get all conversions from view
     const { data: allConversions, error: viewError } = await this.supabase
       .from('google_ads_offline_conversions')
-      .select('booking_id, email, phone_number, conversion_time, conversion_value, currency_code, customer_name, status')
+      .select('booking_id, email, phone_number, conversion_time, conversion_name, conversion_value, currency_code, customer_name, status')
       .order('conversion_time', { ascending: true });
 
     if (viewError) {

@@ -17,6 +17,7 @@ interface Config {
   googleCustomerId: string;
   googleDeveloperToken: string;
   googleConversionActionId: string;
+  googleCourseRentalConversionActionId: string;
 
   // Meta Ads
   metaAppId: string;
@@ -64,6 +65,7 @@ export const appConfig: Config = {
   googleCustomerId: process.env.GOOGLE_CUSTOMER_ID!,
   googleDeveloperToken: process.env.GOOGLE_DEVELOPER_TOKEN!,
   googleConversionActionId: process.env.GOOGLE_CONVERSION_ACTION_ID || '',
+  googleCourseRentalConversionActionId: process.env.GOOGLE_COURSE_RENTAL_CONVERSION_ACTION_ID || '',
   
   // Meta Ads
   metaAppId: process.env.META_APP_ID!,
