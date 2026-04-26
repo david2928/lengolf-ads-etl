@@ -382,12 +382,23 @@ export class MetaAdsInsightsExtractor {
         
         uniqueKeys.add(uniqueKey);
 
+        const impressions = parseInt(insight.impressions || '0');
+
+        // Meta deprecated the flat `video_views` scalar on the insights
+        // endpoint. Derive it from the `actions` array using action_type
+        // 'video_view', which corresponds to a 2-second continuous view
+        // (the same definition the Ads Manager UI shows as "Video views").
+        const videoViewAction = Array.isArray(insight.actions)
+          ? insight.actions.find((a: { action_type?: string }) => a.action_type === 'video_view')
+          : undefined;
+        const videoViews = videoViewAction ? parseInt(videoViewAction.value || '0') : 0;
+
         const data: MetaAdPerformance = {
           ad_id: adId,
           adset_id: adsetId,
           campaign_id: campaignId,
           date,
-          impressions: parseInt(insight.impressions || '0'),
+          impressions,
           clicks: parseInt(insight.clicks || '0'),
           spend_cents: Math.round((parseFloat(insight.spend || '0')) * 100),
           conversions: parseFloat(insight.conversions || '0'),
@@ -399,8 +410,8 @@ export class MetaAdsInsightsExtractor {
           frequency: parseFloat(insight.frequency || '0'),
           unique_clicks: parseInt(insight.unique_clicks || '0'),
           cost_per_unique_click_cents: Math.round((parseFloat(insight.cost_per_unique_click || '0')) * 100),
-          video_views: parseInt(insight.video_views || '0'),
-          video_view_rate: parseFloat(insight.video_view_rate || '0')
+          video_views: videoViews,
+          video_view_rate: impressions > 0 ? videoViews / impressions : 0
         };
 
         performanceData.push(data);

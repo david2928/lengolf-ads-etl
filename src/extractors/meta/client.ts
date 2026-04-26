@@ -514,7 +514,11 @@ export class MetaAdsClient {
       'reach',
       'frequency',
       'unique_clicks',
-      'cost_per_unique_click'
+      'cost_per_unique_click',
+      // `actions` is an array of {action_type, value}. We use it to derive
+      // video_views (action_type='video_view') since Meta deprecated the
+      // flat `video_views` scalar on the insights endpoint in v22+.
+      'actions'
     ].join(',');
 
     let params: Record<string, any> = {
