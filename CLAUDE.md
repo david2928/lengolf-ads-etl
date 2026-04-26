@@ -22,18 +22,15 @@ npm run docker:build # Build Docker image locally
 npm run docker:run   # Run Docker container on port 8080
 ```
 
-### Google Cloud Deployment
+### Running locally
 ```bash
-# Deploy to Cloud Run (Asia Southeast 1)
-gcloud run deploy lengolf-ads-etl \
-  --source . \
-  --region asia-southeast1 \
-  --platform managed \
-  --memory 2Gi \
-  --cpu 2 \
-  --timeout 900 \
-  --max-instances 10 \
-  --min-instances 1
+# .env must have SUPABASE_*, GOOGLE_*, META_*, ETL_API_KEY populated
+npm start                                                # node dist/index.js (requires prior `npm run build`)
+curl -fs http://localhost:8080/health                    # smoke test
+curl -X POST -H "Authorization: Bearer ${ETL_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{"platform":"meta","mode":"incremental","entities":["insights"]}' \
+  http://localhost:8080/api/sync                         # one-shot sync against prod Supabase
 ```
 
 ## Architecture
@@ -95,23 +92,31 @@ Required variables (see `.env.example`):
 - `META_APP_ID`, `META_APP_SECRET`, `META_AD_ACCOUNT_ID` - Meta Ads
 - `ETL_API_KEY` - API authentication
 
-## Cloud Build & Deployment
+## Deployment — GitHub Actions (no long-running server)
 
-- Automated deployment via `cloudbuild.yaml`
-- Deploys to Cloud Run in asia-southeast1
-- Uses Google Secret Manager for sensitive config
-- Container built with Node 20 Alpine base image
+The service does **not** run as a hosted daemon. Each sync is a fresh, ephemeral run inside a GitHub Actions `ubuntu-latest` job: the workflow checks out the repo, `npm ci && npm run build`, starts the Express service in the background on `localhost:8080`, curls `/api/sync` for each entity in sequence, then tears the service down.
+
+Workflows in `.github/workflows/`:
+- `etl-incremental-sync-v2.yml` — every 4h cron + manual dispatch; the main sync path. Also exercises the lazy OAuth refresh on each run.
+- `etl-daily-full-sync-v2.yml` — daily full sync.
+- `etl-emergency-sync-v2.yml` — manual-only emergency sync.
+- `etl-offline-conversions.yml` — Google Ads offline conversion upload.
+
+Secrets (`SUPABASE_*`, `GOOGLE_*`, `META_*`, `ETL_API_KEY`) live in GH Actions repository secrets and are exported into `$GITHUB_ENV` by the workflow's setup step. The Dockerfile is retained for local container runs but is not deployed to any hosted runtime — Cloud Run was abandoned.
+
+Tokens auto-refresh inside `TokenManager` (Google with a 5-min expiry buffer, Meta proactively when <14 days remain on the 60-day long-lived token), so no separate refresh cron is needed.
 
 ## API Authentication
 
 All `/api/*` endpoints require Bearer token:
 ```bash
-curl -H "Authorization: Bearer ${ETL_API_KEY}" \
-  https://your-service.run.app/api/sync
+curl -H "Authorization: Bearer ${ETL_API_KEY}" http://localhost:8080/api/sync
 ```
+
+The service only listens on the localhost of whatever runner spawned it — there is no public URL.
 
 ## Integration Points
 
-- Supabase pgcron triggers hourly incremental syncs
-- Main Lengolf Forms app queries synced data from marketing schema
-- Both services share same Supabase database but different schemas
+- GH Actions cron (`etl-incremental-sync-v2.yml`, every 4h) is the only thing that triggers regular syncs. There is no `pg_cron` job calling out.
+- Main Lengolf Forms app queries the populated `marketing.*` tables directly from Supabase.
+- Both services share the same Supabase database; this ETL writes only to the `marketing` schema.
