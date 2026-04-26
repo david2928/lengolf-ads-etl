@@ -2,8 +2,8 @@ name: ETL Incremental Data Sync
 
 on:
   schedule:
-    # Run every 2 hours during business hours (UTC)
-    - cron: '0 */2 * * *'
+    # Run every 4 hours (UTC) — also exercises Meta + Google lazy token refresh
+    - cron: '0 */4 * * *'
   workflow_dispatch:
     inputs:
       platform:
