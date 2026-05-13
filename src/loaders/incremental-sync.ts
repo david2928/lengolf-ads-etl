@@ -544,11 +544,21 @@ export class IncrementalSyncManager {
         batchId
       });
 
-      const creatives = await this.metaCreativesExtractor.extractAllCreatives();
-      const result = await this.batchProcessor.processMetaCreatives(creatives, batchId);
+      const extracted = await this.metaCreativesExtractor.extractAllCreatives();
+      const result = await this.batchProcessor.processMetaCreatives(
+        extracted.creatives,
+        batchId,
+        // Surface "Graph didn't return this creative" cases as failures so
+        // the sync is marked partial in etl_sync_log rather than silently
+        // succeeding with fewer rows than expected.
+        extracted.missingFromGraph
+      );
 
       logger.info('Meta creatives sync completed', {
-        creativeCount: creatives.length,
+        requestedCreativeIds: extracted.requestedCreativeIds,
+        receivedRawCreatives: extracted.receivedRawCreatives,
+        missingFromGraph: extracted.missingFromGraph,
+        transformedAndUpserted: extracted.creatives.length,
         result
       });
 

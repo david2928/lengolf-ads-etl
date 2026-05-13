@@ -670,18 +670,24 @@ export class BatchProcessor {
 
   async processMetaCreatives(
     creatives: MetaAdCreative[],
-    batchId?: string
+    batchId?: string,
+    // Pre-counted failures from upstream extraction (e.g. creatives that
+    // Graph didn't return). Added to records_failed so a partial Graph
+    // response surfaces as `status='partial'` in etl_sync_log instead of
+    // a silent success.
+    preCountedFailures: number = 0
   ): Promise<BatchResult> {
     try {
       logger.info('Starting Meta creatives batch processing', {
         totalRecords: creatives.length,
         batchSize: this.batchSize,
+        preCountedFailures,
         batchId
       });
 
       let totalInserted = 0;
       let totalUpdated = 0;
-      let totalFailed = 0;
+      let totalFailed = preCountedFailures;
 
       for (let i = 0; i < creatives.length; i += this.batchSize) {
         const batch = creatives.slice(i, i + this.batchSize);
@@ -733,7 +739,10 @@ export class BatchProcessor {
 
       if (batchId) {
         await this.supabase.updateSyncBatch(batchId, {
-          records_processed: creatives.length,
+          // records_processed reflects the full requested universe, so a
+          // partial Graph response (preCountedFailures > 0) is visible as
+          // processed > inserted in the sync log.
+          records_processed: creatives.length + preCountedFailures,
           records_inserted: totalInserted,
           records_updated: totalUpdated,
           records_failed: totalFailed,

@@ -8,7 +8,23 @@ interface CreativeOwner {
   adId: string;
   campaignId: string | null;
   adsetId: string | null;
+  updatedTime: string | null; // for recency tiebreak when multiple ads share a creative
 }
+
+export interface ExtractCreativesResult {
+  creatives: MetaAdCreative[];
+  requestedCreativeIds: number;
+  receivedRawCreatives: number;
+  // Number of creative_ids we asked Graph for but didn't get back — flows
+  // into etl_sync_log.records_failed so a partial Graph response surfaces
+  // as a "partial" sync status rather than a silent gap.
+  missingFromGraph: number;
+}
+
+// Below this fraction of (received / requested) we treat the run as
+// degraded enough to log a hard warning; the count still flows into
+// records_failed regardless.
+const PARTIAL_RESPONSE_WARN_RATIO = 0.9;
 
 /**
  * Extractor for marketing.meta_ads_ad_creatives.
@@ -32,7 +48,7 @@ export class MetaCreativesExtractor {
     this.supabase = supabase;
   }
 
-  async extractAllCreatives(): Promise<MetaAdCreative[]> {
+  async extractAllCreatives(): Promise<ExtractCreativesResult> {
     logger.info('Starting Meta creatives extraction');
 
     const ownerMap = await this.buildCreativeOwnerMap();
@@ -43,14 +59,44 @@ export class MetaCreativesExtractor {
     });
 
     if (!creativeIds.length) {
-      return [];
+      return {
+        creatives: [],
+        requestedCreativeIds: 0,
+        receivedRawCreatives: 0,
+        missingFromGraph: 0
+      };
     }
 
     const rawCreatives = await this.client.getAdCreatives(creativeIds);
+    const missing = creativeIds.length - rawCreatives.length;
+    const ratio = rawCreatives.length / creativeIds.length;
+
     logger.info(`Graph API returned ${rawCreatives.length} of ${creativeIds.length} requested creatives`);
+
+    if (missing > 0) {
+      // getAdCreatives() swallows per-batch failures and continues; this is
+      // how we surface them. Anything below the warn ratio gets a hard log
+      // so it shows up in the daily report.
+      const level = ratio < PARTIAL_RESPONSE_WARN_RATIO ? 'warn' : 'info';
+      const msg = `Meta Graph returned a partial creative set — ${missing} of ${creativeIds.length} missing`;
+      if (level === 'warn') {
+        logger.warn(msg, { missing, requested: creativeIds.length, ratio });
+      } else {
+        logger.info(msg, { missing, requested: creativeIds.length, ratio });
+      }
+    }
 
     const transformed: MetaAdCreative[] = [];
     for (const raw of rawCreatives) {
+      // Guard: Graph occasionally returns malformed stubs (e.g. when a
+      // creative was hard-deleted between the meta_ads_ads sync and now).
+      // `creative_id` is NOT NULL in the target table so writing undefined
+      // would fail the entire upsert batch.
+      if (!raw || typeof raw.id !== 'string' || raw.id.length === 0) {
+        logger.warn('Skipping malformed creative response from Graph', { raw });
+        continue;
+      }
+
       try {
         const owner = ownerMap.get(raw.id);
         if (!owner) {
@@ -68,23 +114,31 @@ export class MetaCreativesExtractor {
     }
 
     logger.info(`Transformed ${transformed.length} Meta creatives ready for upsert`);
-    return transformed;
+
+    return {
+      creatives: transformed,
+      requestedCreativeIds: creativeIds.length,
+      receivedRawCreatives: rawCreatives.length,
+      missingFromGraph: missing
+    };
   }
 
   /**
-   * Read every (ad_id, creative_id, ad_set_id, campaign_id) tuple from
-   * marketing.meta_ads_ads where creative_id IS NOT NULL, and reduce to a
-   * map keyed by creative_id. When multiple ads share a creative, prefer the
-   * one with the most recent updated_time (falling back to created_time)
-   * so the denormalized ad_id/adset_id/campaign_id columns reflect the
-   * most current owner.
+   * Read every (ad_id, creative_id, ad_set_id, campaign_id, updated_time)
+   * tuple from marketing.meta_ads_ads where creative_id IS NOT NULL, and
+   * reduce to a map keyed by creative_id. When multiple ads share a
+   * creative, prefer the one with the most recent updated_time so the
+   * denormalized ad_id/adset_id/campaign_id columns reflect the most
+   * current owner.
+   *
+   * Pagination orders by `ad_id ASC` (a stable, immutable PK) rather than
+   * updated_time so concurrent writes to meta_ads_ads can't shift rows
+   * across page boundaries during the sweep. The recency tiebreak happens
+   * in JS after all pages are collected.
    */
   private async buildCreativeOwnerMap(): Promise<Map<string, CreativeOwner>> {
     const supabaseClient = this.supabase.getClient();
 
-    // Paginate through marketing.meta_ads_ads to handle accounts larger than
-    // Supabase's default 1000-row limit. Today we have ~443 ads — well under
-    // one page — but this keeps the extractor robust as the account grows.
     const pageSize = 1000;
     let offset = 0;
     const rows: Array<{
@@ -93,16 +147,16 @@ export class MetaCreativesExtractor {
       ad_set_id: string | null;
       campaign_id: string | null;
       updated_time: string | null;
-      created_time: string | null;
     }> = [];
 
     while (true) {
       const { data, error } = await supabaseClient
         .schema('marketing')
         .from('meta_ads_ads')
-        .select('ad_id, creative_id, ad_set_id, campaign_id, updated_time, created_time')
+        .select('ad_id, creative_id, ad_set_id, campaign_id, updated_time')
         .not('creative_id', 'is', null)
-        .order('updated_time', { ascending: false, nullsFirst: false })
+        // Stable pagination key — ad_id is the PK and never changes.
+        .order('ad_id', { ascending: true })
         .range(offset, offset + pageSize - 1);
 
       if (error) {
@@ -128,11 +182,26 @@ export class MetaCreativesExtractor {
 
       const existing = map.get(row.creative_id);
       if (!existing) {
-        // Rows are pre-sorted by updated_time DESC, so the first one wins.
         map.set(row.creative_id, {
           adId: row.ad_id,
           campaignId: row.campaign_id,
-          adsetId: row.ad_set_id
+          adsetId: row.ad_set_id,
+          updatedTime: row.updated_time
+        });
+        continue;
+      }
+
+      // Recency tiebreak: keep whichever ad's updated_time is newer.
+      // Null updated_time is treated as oldest so it loses to any
+      // non-null candidate.
+      const existingT = existing.updatedTime ?? '';
+      const candidateT = row.updated_time ?? '';
+      if (candidateT > existingT) {
+        map.set(row.creative_id, {
+          adId: row.ad_id,
+          campaignId: row.campaign_id,
+          adsetId: row.ad_set_id,
+          updatedTime: row.updated_time
         });
       }
     }
