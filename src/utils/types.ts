@@ -60,6 +60,36 @@ export interface CreativeAsset {
   link_url?: string;
 }
 
+// Row shape for marketing.meta_ads_ad_creatives (23 cols, PK = creative_id).
+// Populated by MetaCreativesExtractor + processMetaCreatives.
+// `creative_json` is the full raw Graph creative response, kept as an
+// escape hatch for fields that aren't modeled as typed columns.
+export interface MetaAdCreative {
+  creative_id: string;
+  ad_id: string;
+  campaign_id?: string | null;
+  adset_id?: string | null;
+  creative_name?: string | null;
+  creative_status?: string | null;
+  creative_type?: string | null;          // ← Graph `object_type` (VIDEO, PHOTO, SHARE, ...)
+  image_url?: string | null;
+  thumbnail_url?: string | null;
+  preview_url?: string | null;
+  video_url?: string | null;
+  title?: string | null;
+  body?: string | null;
+  call_to_action_type?: string | null;
+  link_url?: string | null;               // asset_feed_spec.link_urls[0].website_url || template_url
+  display_link?: string | null;           // ← link_destination_display_url
+  carousel_data?: any | null;             // jsonb: { bodies, titles, link_urls } when multi-asset
+  image_hash?: string | null;
+  video_id?: string | null;
+  creative_json: any;                     // jsonb: full raw Graph response
+  created_at: string;
+  updated_at: string;
+  last_synced_at: string;
+}
+
 export interface AdWithCreatives {
   ad: GoogleAd | MetaAd;
   creativeAssets?: CreativeAsset[];

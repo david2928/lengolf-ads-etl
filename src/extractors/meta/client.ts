@@ -436,13 +436,22 @@ export class MetaAdsClient {
   async getAdCreatives(creativeIds: string[]): Promise<any[]> {
     if (!creativeIds.length) return [];
 
+    // Field list is the union of:
+    //  - per-asset extraction used by MetaAdsExtractor.extractAssetsFromCreative
+    //    (image_hash/image_url/video_id/thumbnail_url/object_story_spec/asset_feed_spec)
+    //  - per-creative population for marketing.meta_ads_ad_creatives
+    //    (object_type ⇒ creative_type, object_story_id/effective_object_story_id
+    //    for engagement ads, template_url as preview, link_url + display_link)
     const fields = [
       'id',
       'name',
       'status',
+      'object_type',
       'title',
       'body',
       'call_to_action_type',
+      'object_story_id',
+      'effective_object_story_id',
       'image_hash',
       'image_url',
       'video_id',

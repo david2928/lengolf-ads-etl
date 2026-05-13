@@ -8,6 +8,7 @@ import GoogleAdsConversionUploader from '@/extractors/google/conversion-upload';
 import MetaCampaignsExtractor from '@/extractors/meta/campaigns';
 import MetaAdSetsExtractor from '@/extractors/meta/ad-sets';
 import MetaAdsExtractor from '@/extractors/meta/ads';
+import MetaCreativesExtractor from '@/extractors/meta/creatives';
 import MetaAdsInsightsExtractor from '@/extractors/meta/insights';
 import logger from '@/utils/logger';
 import { SyncResult, SyncState, SyncParams } from '@/utils/types';
@@ -22,6 +23,7 @@ export class IncrementalSyncManager {
   private metaCampaignsExtractor: MetaCampaignsExtractor;
   private metaAdSetsExtractor: MetaAdSetsExtractor;
   private metaAdsExtractor: MetaAdsExtractor;
+  private metaCreativesExtractor: MetaCreativesExtractor;
   private metaInsightsExtractor: MetaAdsInsightsExtractor;
 
   constructor() {
@@ -34,6 +36,7 @@ export class IncrementalSyncManager {
     this.metaCampaignsExtractor = new MetaCampaignsExtractor();
     this.metaAdSetsExtractor = new MetaAdSetsExtractor();
     this.metaAdsExtractor = new MetaAdsExtractor();
+    this.metaCreativesExtractor = new MetaCreativesExtractor(this.supabase);
     this.metaInsightsExtractor = new MetaAdsInsightsExtractor();
   }
 
@@ -529,16 +532,37 @@ export class IncrementalSyncManager {
 
   private async syncMetaCreatives(syncParams: SyncParams, batchId: string): Promise<any> {
     try {
-      const isHistoricalBackfill = !syncParams.modifiedSince;
-      logger.info('Syncing Meta creatives', { 
-        modifiedSince: syncParams.modifiedSince?.toISOString() || 'No date filter (historical backfill)',
-        historicalBackfill: isHistoricalBackfill,
-        batchId 
+      // Note: this sync sweeps ALL distinct creative_ids from marketing.meta_ads_ads
+      // on every run, regardless of `mode`. The universe is small (~411 distinct
+      // creatives across 443 ads = 9 batches of 50) and creatives are nearly
+      // immutable post-creation, so date filtering is intentionally not applied.
+      // The ads sync runs immediately before this one in every GH Actions
+      // workflow, so meta_ads_ads is current at extraction time.
+      // See CREATIVE_SYNC_ANALYSIS.md for the historical bug that motivated this.
+      logger.info('Syncing Meta creatives (full sweep of meta_ads_ads.creative_id)', {
+        modifiedSince: syncParams.modifiedSince?.toISOString() ?? 'n/a — sweep ignores date filter',
+        batchId
       });
 
-      // Meta creatives are extracted as part of ads extraction
-      // This method is kept for consistency but delegates to ads sync
-      return this.syncMetaAds(syncParams, batchId);
+      const extracted = await this.metaCreativesExtractor.extractAllCreatives();
+      const result = await this.batchProcessor.processMetaCreatives(
+        extracted.creatives,
+        batchId,
+        // Surface "Graph didn't return this creative" cases as failures so
+        // the sync is marked partial in etl_sync_log rather than silently
+        // succeeding with fewer rows than expected.
+        extracted.missingFromGraph
+      );
+
+      logger.info('Meta creatives sync completed', {
+        requestedCreativeIds: extracted.requestedCreativeIds,
+        receivedRawCreatives: extracted.receivedRawCreatives,
+        missingFromGraph: extracted.missingFromGraph,
+        transformedAndUpserted: extracted.creatives.length,
+        result
+      });
+
+      return result;
 
     } catch (error) {
       logger.error('Meta creatives sync failed', { error: error.message });

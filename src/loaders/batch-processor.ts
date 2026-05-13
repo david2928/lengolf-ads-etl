@@ -1,6 +1,6 @@
 import SupabaseLoader from './supabase-client';
 import logger from '@/utils/logger';
-import { BatchResult, AdWithCreatives, CreativeAsset, MetaCampaign, MetaAdSet, MetaAd } from '@/utils/types';
+import { BatchResult, AdWithCreatives, CreativeAsset, MetaCampaign, MetaAdSet, MetaAd, MetaAdCreative } from '@/utils/types';
 import { GoogleAdsKeywordPerformance, GoogleAdsCampaignPerformance, GoogleAdsPMaxPerformance } from '@/extractors/google/performance';
 import { GoogleAdsSearchTermPerformance } from '@/extractors/google/search-terms';
 import { GoogleAdsGeographicPerformance } from '@/extractors/google/geographic';
@@ -666,6 +666,110 @@ export class BatchProcessor {
       updated: totalUpdated,
       failed: 0
     };
+  }
+
+  async processMetaCreatives(
+    creatives: MetaAdCreative[],
+    batchId?: string,
+    // Pre-counted failures from upstream extraction (e.g. creatives that
+    // Graph didn't return). Added to records_failed so a partial Graph
+    // response surfaces as `status='partial'` in etl_sync_log instead of
+    // a silent success.
+    preCountedFailures: number = 0
+  ): Promise<BatchResult> {
+    try {
+      logger.info('Starting Meta creatives batch processing', {
+        totalRecords: creatives.length,
+        batchSize: this.batchSize,
+        preCountedFailures,
+        batchId
+      });
+
+      let totalInserted = 0;
+      let totalUpdated = 0;
+      let totalFailed = preCountedFailures;
+
+      for (let i = 0; i < creatives.length; i += this.batchSize) {
+        const batch = creatives.slice(i, i + this.batchSize);
+
+        try {
+          // PK is creative_id. The Graph API can return the same creative
+          // across batches when an account has duplicates in its ad set
+          // hierarchy; de-dup defensively before upsert so PostgreSQL's
+          // ON CONFLICT doesn't error on "cannot affect row a second time"
+          // (same fix shipped in 0052a44 for ad_creative_assets).
+          const seen = new Set<string>();
+          const unique = batch.filter(c => {
+            if (seen.has(c.creative_id)) return false;
+            seen.add(c.creative_id);
+            return true;
+          });
+
+          if (unique.length !== batch.length) {
+            logger.warn('Removed duplicate Meta creatives within batch', {
+              original: batch.length,
+              unique: unique.length,
+              duplicates: batch.length - unique.length
+            });
+          }
+
+          const result = await this.supabase.bulkUpsert(
+            'meta_ads_ad_creatives',
+            unique,
+            'creative_id'
+          );
+
+          totalInserted += result.inserted;
+          totalUpdated += result.updated;
+
+          logger.info(`Processed Meta creatives batch ${Math.floor(i / this.batchSize) + 1}`, {
+            batchStart: i,
+            batchEnd: Math.min(i + this.batchSize, creatives.length),
+            inserted: result.inserted,
+            updated: result.updated
+          });
+        } catch (error) {
+          logger.error(`Meta creatives batch failed at offset ${i}`, {
+            error: error.message,
+            batchSize: batch.length
+          });
+          totalFailed += batch.length;
+        }
+      }
+
+      if (batchId) {
+        await this.supabase.updateSyncBatch(batchId, {
+          // records_processed reflects the full requested universe, so a
+          // partial Graph response (preCountedFailures > 0) is visible as
+          // processed > inserted in the sync log.
+          records_processed: creatives.length + preCountedFailures,
+          records_inserted: totalInserted,
+          records_updated: totalUpdated,
+          records_failed: totalFailed,
+          status: totalFailed === 0 ? 'completed' : 'partial'
+        });
+      }
+
+      const result = {
+        inserted: totalInserted,
+        updated: totalUpdated,
+        failed: totalFailed
+      };
+
+      logger.info('Meta creatives batch processing completed', result);
+      return result;
+    } catch (error) {
+      logger.error('Meta creatives batch processing failed', { error: error.message });
+
+      if (batchId) {
+        await this.supabase.updateSyncBatch(batchId, {
+          status: 'failed',
+          error_message: error.message
+        });
+      }
+
+      throw error;
+    }
   }
 
   async validateDataIntegrity(tableName: string, sampleSize: number = 100): Promise<boolean> {
