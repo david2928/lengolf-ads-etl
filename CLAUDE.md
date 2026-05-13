@@ -73,8 +73,9 @@ curl -X POST -H "Authorization: Bearer ${ETL_API_KEY}" \
 Uses Supabase `marketing` schema with tables:
 - `google_ads_campaigns`, `google_ads_ad_groups`, `google_ads_ads`, `google_ads_keywords`
 - `meta_ads_campaigns`, `meta_ads_ad_sets`, `meta_ads_ads`, `meta_ads_ad_creatives`
-- `ad_creative_assets` - Unified creative asset storage
-- `etl_sync_log` - Sync history and state tracking
+- `ad_creative_assets` - Unified per-asset creative storage (cross-platform, multiple rows per creative). Written by the `ads` sync via `processSingleMetaAdsBatch`.
+- `meta_ads_ad_creatives` - Meta-only per-creative storage (one row per creative, PK = `creative_id`). 23 columns including `creative_type` (← Graph `object_type`), `carousel_data` jsonb for multi-asset specs, and `creative_json` jsonb (full raw Graph response — escape hatch for unmodeled fields). Written by the dedicated `creatives` entity sync (`MetaCreativesExtractor` → `processMetaCreatives`) which sweeps all distinct `creative_id`s from `meta_ads_ads`. Coexists with `ad_creative_assets`; this is the table to use for per-creative SQL pivots.
+- `etl_sync_log` - Sync history and state tracking. The `creatives` sync logs with `platform='meta', entity_type='creatives'`. `status='partial'` means Graph returned fewer creatives than requested (partial 5xx); investigate via the extractor's `missingFromGraph` log line.
 - `platform_tokens` - OAuth token storage
 
 ## TypeScript Configuration
