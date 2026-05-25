@@ -13,6 +13,13 @@ import MetaAdsInsightsExtractor from '@/extractors/meta/insights';
 import logger from '@/utils/logger';
 import { SyncResult, SyncState, SyncParams } from '@/utils/types';
 
+// Google attributes offline conversions retroactively for up to 30 days after
+// the click, so a pure "since last sync" window leaves recent rows with stale
+// conversion counts. Performance sync re-fetches this rolling window every run
+// and UPSERTs, refreshing conversions/cost/etc. as attribution windows mature.
+// 5-day buffer covers conversion-upload latency and timezone edges.
+const PERFORMANCE_ATTRIBUTION_REFRESH_DAYS = 35;
+
 export class IncrementalSyncManager {
   private supabase: SupabaseLoader;
   private batchProcessor: BatchProcessor;
@@ -392,34 +399,46 @@ export class IncrementalSyncManager {
 
   private async syncGooglePerformance(syncParams: SyncParams, batchId: string, options: any = {}): Promise<any> {
     try {
-      const startDate = options.startDate ? new Date(options.startDate) : undefined;
-      const endDate = options.endDate ? new Date(options.endDate) : undefined;
-      
-      logger.info('Syncing Google Ads performance data', { 
-        modifiedSince: syncParams.modifiedSince.toISOString(),
-        startDate: startDate?.toISOString(),
-        endDate: endDate?.toISOString(),
+      const explicitStartDate = options.startDate ? new Date(options.startDate) : undefined;
+      const explicitEndDate = options.endDate ? new Date(options.endDate) : undefined;
+      const hasExplicitRange = !!(explicitStartDate && explicitEndDate);
+
+      // Incremental mode: re-fetch the rolling attribution window so retroactive
+      // offline-conversion attribution lands in Supabase via the on-conflict UPSERT.
+      const rollingStart = explicitStartDate
+        ?? new Date(Date.now() - PERFORMANCE_ATTRIBUTION_REFRESH_DAYS * 24 * 60 * 60 * 1000);
+      const rollingEnd = explicitEndDate ?? new Date();
+
+      logger.info('Syncing Google Ads performance data', {
+        modifiedSince: syncParams.modifiedSince?.toISOString(),
+        rollingStart: rollingStart.toISOString(),
+        rollingEnd: rollingEnd.toISOString(),
+        hasExplicitRange,
+        attributionRefreshDays: PERFORMANCE_ATTRIBUTION_REFRESH_DAYS,
         options,
-        batchId 
+        batchId
       });
 
-      // Extract all performance data types in parallel
+      // Campaign + keyword: rolling window every run so the on-conflict UPSERT
+      // refreshes stale conversions on already-stored rows.
+      // PMax: kept on the legacy incremental path. The PMax UNIQUE index treats
+      // NULL asset_group_id/listing_group_id as distinct, so re-fetching would
+      // pile duplicate rows rather than update — needs a dedup fix first.
       const [keywordPerformance, campaignPerformance, pmaxPerformance] = await Promise.all([
         this.googlePerformanceExtractor.extractKeywordPerformance(
-          startDate,
-          endDate,
-          // For specific date ranges, don't use modifiedSince filter  
-          startDate && endDate ? undefined : syncParams.modifiedSince
+          rollingStart,
+          rollingEnd,
+          undefined
         ),
         this.googlePerformanceExtractor.extractCampaignPerformance(
-          startDate,
-          endDate,
-          startDate && endDate ? undefined : syncParams.modifiedSince
+          rollingStart,
+          rollingEnd,
+          undefined
         ),
         this.googlePerformanceExtractor.extractPMaxPerformance(
-          startDate,
-          endDate,
-          startDate && endDate ? undefined : syncParams.modifiedSince
+          explicitStartDate,
+          explicitEndDate,
+          hasExplicitRange ? undefined : syncParams.modifiedSince
         )
       ]);
 
@@ -572,20 +591,28 @@ export class IncrementalSyncManager {
 
   private async syncGoogleAdPerformance(syncParams: SyncParams, batchId: string, options: any = {}): Promise<any> {
     try {
-      const startDate = options.startDate ? new Date(options.startDate) : undefined;
-      const endDate = options.endDate ? new Date(options.endDate) : undefined;
-      
-      logger.info('Syncing Google Ads ad performance data', { 
-        modifiedSince: syncParams.modifiedSince.toISOString(),
-        startDate: startDate?.toISOString(),
-        endDate: endDate?.toISOString(),
-        batchId 
+      const explicitStartDate = options.startDate ? new Date(options.startDate) : undefined;
+      const explicitEndDate = options.endDate ? new Date(options.endDate) : undefined;
+
+      // Incremental mode: re-fetch the rolling attribution window so retroactive
+      // offline-conversion attribution lands in Supabase via the on-conflict UPSERT.
+      const rollingStart = explicitStartDate
+        ?? new Date(Date.now() - PERFORMANCE_ATTRIBUTION_REFRESH_DAYS * 24 * 60 * 60 * 1000);
+      const rollingEnd = explicitEndDate ?? new Date();
+
+      logger.info('Syncing Google Ads ad performance data', {
+        modifiedSince: syncParams.modifiedSince?.toISOString(),
+        rollingStart: rollingStart.toISOString(),
+        rollingEnd: rollingEnd.toISOString(),
+        hasExplicitRange: !!(explicitStartDate && explicitEndDate),
+        attributionRefreshDays: PERFORMANCE_ATTRIBUTION_REFRESH_DAYS,
+        batchId
       });
 
       const adPerformance = await this.googlePerformanceExtractor.extractAdPerformance(
-        startDate,
-        endDate,
-        startDate && endDate ? undefined : syncParams.modifiedSince
+        rollingStart,
+        rollingEnd,
+        undefined
       );
 
       const result = await this.batchProcessor.processGoogleAdPerformance(adPerformance, batchId);
